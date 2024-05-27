@@ -1,6 +1,6 @@
 <h1>👋 Hey! Nice to see you.</h1>
 
-<p>Welcome to my page! </br> I'm Kamil, Fullstack developer from <img src="https://upload.wikimedia.org/wikipedia/en/thumb/1/12/Flag_of_Poland.svg/1200px-Flag_of_Poland.svg.png" width="13"/> <b>Łódź, Poland</b>, currently traveling the world!
+I'm Kamil, Fullstack developer from <img src="https://upload.wikimedia.org/wikipedia/en/thumb/1/12/Flag_of_Poland.svg/1200px-Flag_of_Poland.svg.png" width="13"/> <b>Łódź, Poland</b>, currently traveling the world!
 
 <h3>Things I code with</h3>
 <p>
