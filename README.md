@@ -18,5 +18,6 @@ I'm Kamil, Fullstack developer from <img src="https://upload.wikimedia.org/wikip
 </ul>
 <h3>My latest posts</h3>
 <ul>
-  <li><a href="https://whoisarjen.com/blog/the-power-of-typescript-satisfied-operator-in-less-than-2-minutes"><b>The Power of Typescript Satisfied Operator in Less than 2 Minutes</b></a><br/><i>So remember my dear dev, satisfies checks the type of an object, without having impact on the TypeScript's assumption and should be one of your main ally again typing constant objects.
+  <li><a href="https://whoisarjen.com/blog/the-power-of-typescript-satisfied-operator-in-less-than-2-minutes"><b>The Power of Typescript Satisfied Operator in Less than 2 Minutes</b></a><br/><i>So remember my dear dev, satisfies checks the type of an object, without having impact on the TypeScript's assumption and should be one of your main ally again typing constant objects.</i></li>
+  <li><a href="https://whoisarjen.com/blog/how-i-resolved-prisma-issues-and-fixed-vercel-500-internal-server-error"><b>How I Resolved Prisma Issues and Fixed Vercel 500 INTERNAL_SERVER_ERROR 🚀</b></a><br/><i>With these adjustments, my application ran smoothly on Vercel. Finally, I could get some well-deserved rest! 🎉</i></li>
 </ul>
