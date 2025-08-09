@@ -1,0 +1,198 @@
+---
+title: 'Why Different LIMIT Values Return Different Results in PostgreSQL (And How to Fix It) 🎯'
+date: 2025-08-10T16:32:14Z
+lastmod: '2025-08-10'
+summary: 'A deep dive into PostgreSQL pagination inconsistencies and the importance of deterministic sorting in complex queries that was driving our users crazy'
+tags: ['PostgreSQL', 'Database', 'Pagination', 'SQL', 'Performance']
+---
+
+# Why Different LIMIT Values Return Different Results in PostgreSQL (And How to Fix It) 🎯
+
+Have you ever encountered a bizarre situation where running the same PostgreSQL query with `LIMIT 5` versus `LIMIT 20` returns completely different first 5 results? If so, you've stumbled upon one of the most confusing aspects of SQL pagination that can drive developers crazy.
+
+This exact issue happened in our production search API and nearly cost us some major clients. Here's the real-world problem and how we solved it.
+
+## The Problem That Almost Broke Our Search API
+
+Users reported that search suggestions (first 5 results) were showing different products than the same search on the main results page (first 20 results). **The same query with different LIMIT values was returning different first 5 products!** 🤯
+
+Here's the problematic query that was causing chaos:
+
+```sql
+SELECT
+    fp.id,
+    fp.code,
+    product.grossPrice,
+    fp.avg_similarity,
+    fp.categoryPriority
+FROM FinalProductsPool fp
+JOIN Product ON product.id = fp.id
+ORDER BY
+    -- Promoted products first
+    CASE WHEN fp.code = ANY($1) THEN 1 ELSE 0 END DESC,
+    -- Then by relevance
+    fp.avg_similarity DESC,
+    fp.avg_similarity_without_worst DESC,
+    fp.categoryPriority DESC,
+    fp.plcRank DESC
+LIMIT 5; -- vs LIMIT 20 = different results!
+```
+
+## Why This Nightmare Happens
+
+**Three culprits behind the chaos:**
+
+### 1. **Tie-Breaking Ambiguity**
+
+When multiple rows have identical values for all `ORDER BY` columns, PostgreSQL doesn't guarantee which ones come first. It returns them in whatever order is most efficient.
+
+Our products often had:
+
+- Same similarity scores (0.75)
+- Same category priority (100)
+- Same PLC rank (0.5)
+
+Result? PostgreSQL randomly shuffled "tied" products.
+
+### 2. **Different Query Plans**
+
+Different `LIMIT` values trigger different execution strategies:
+
+- **LIMIT 5**: Uses quick-sort optimized for small results
+- **LIMIT 20**: Might use heap-sort that processes data differently
+
+### 3. **Floating-Point Precision**
+
+Similarity calculations create values that look identical but aren't:
+
+```sql
+-- These look equal but cause random ordering
+0.7500000001
+0.7500000000
+0.7499999999
+```
+
+## The One-Line Fix That Saved Our API
+
+The solution is simple: **always add a unique, deterministic field as the final sort criterion**.
+
+```sql
+ORDER BY
+    CASE WHEN fp.code = ANY($1) THEN 1 ELSE 0 END DESC,
+    fp.avg_similarity DESC,
+    fp.avg_similarity_without_worst DESC,
+    fp.categoryPriority DESC,
+    fp.plcRank DESC,
+    COALESCE(NULLIF(product.grossPrice, '')::NUMERIC, 0) DESC,
+    fp.id ASC  -- 🎯 The magic line!
+```
+
+Adding `fp.id ASC` ensures:
+
+✅ **Identical products always ordered by ID**  
+✅ **Results are completely deterministic**  
+✅ **First 5 products identical regardless of LIMIT**
+
+## Real-World Implementation
+
+Here's how we fixed it in our Node.js/Prisma stack:
+
+```typescript
+const searchResults = await prisma.$queryRaw`
+  WITH RankedProducts AS (
+    SELECT 
+      p.id,
+      p.code,
+      p.grossPrice,
+      similarity_score(p.name, ${searchQuery}) as relevance
+    FROM products p
+    WHERE p.active = true
+  )
+  SELECT * FROM RankedProducts
+  ORDER BY
+    relevance DESC,
+    COALESCE(NULLIF(grossPrice, '')::NUMERIC, 0) DESC,
+    id ASC  -- Deterministic tie-breaker
+  OFFSET ${skip}
+  LIMIT ${limit}
+`
+```
+
+## Critical Implementation Details
+
+### Handle NULL Values Properly
+
+```sql
+ORDER BY
+    COALESCE(similarity_score, 0) DESC,
+    COALESCE(category_priority, 0) DESC,
+    COALESCE(NULLIF(price, '')::NUMERIC, 0) DESC,
+    id ASC -- Never NULL in primary keys
+```
+
+### Pick the Right Tie-Breaker
+
+Your tie-breaker should be:
+
+- **Unique**: Primary key or unique identifier
+- **Stable**: Won't change between queries
+- **Indexed**: For performance (PKs are auto-indexed)
+
+### Consider Business Logic
+
+Sometimes you want specific tie-breaking:
+
+```sql
+ORDER BY
+    relevance DESC,
+    price DESC,        -- Higher prices first when tied
+    created_at DESC,   -- Newer products for tied prices
+    id ASC            -- Final deterministic breaker
+```
+
+## Performance Impact: Minimal Cost, Massive Benefit
+
+Adding deterministic sorting has almost zero performance impact:
+
+- **Primary keys are always indexed**
+- **Tie-breaker only affects rows with identical sort values**
+- **Modern databases handle this efficiently**
+- **Query execution time increase: <2%**
+
+## Testing Your Fix
+
+Verify your solution works:
+
+```sql
+-- Test 1: Small limit
+SELECT id FROM your_table ORDER BY score DESC, id ASC LIMIT 5;
+
+-- Test 2: Larger limit
+SELECT id FROM your_table ORDER BY score DESC, id ASC LIMIT 20;
+
+-- First 5 IDs should be identical! ✅
+```
+
+## Key Takeaways
+
+1. **Always add deterministic tie-breakers** to paginated queries
+2. **Use unique, stable columns** (primary keys work perfectly)
+3. **Handle NULL values explicitly** in sort columns
+4. **Test with different LIMIT values** to ensure consistency
+5. **Consider business logic** when choosing tie-breaking criteria
+
+## When You Need This Fix
+
+**Red flags requiring this solution:**
+
+- Pagination results change randomly
+- Same query + different LIMITs = different initial results
+- Users complaining about "jumping" search results
+- E-commerce sites with inconsistent product ordering
+- Any complex sorting with potential ties
+
+The next time you see inconsistent pagination results, remember: **add a deterministic tie-breaker, and your problems will sort themselves out!** 🎯
+
+---
+
+_This fix saved our API from angry clients and gave us predictable pagination across thousands of product searches daily. Simple problems sometimes have simple solutions! 🚀_
