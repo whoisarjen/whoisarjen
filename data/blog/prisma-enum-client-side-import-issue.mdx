@@ -1,0 +1,388 @@
+---
+title: 'The Hidden Danger of Importing Prisma Enums in Client-Side Code'
+date: 2025-01-24T14:00:00Z
+lastmod: '2025-01-24'
+tags: ['prisma', 'typescript', 'bundling', 'build-errors', 'frontend']
+draft: false
+summary: 'Why importing Prisma enums directly in client-side code breaks production builds and the constants pattern that solves it.'
+---
+
+Building a modern web application with **Prisma ORM** and meta-frameworks like **Next.js** or **SvelteKit** can lead to a frustrating build error that's hard to debug. Here's the problem I encountered, why it happens, and the solution that finally worked.
+
+### The Problem
+
+Everything works perfectly in development, but when you try to build for production, you encounter a cryptic error:
+
+```
+ERROR  Build Error: Could not resolve "../.prisma/client/index-browser"
+from "../.prisma/client/index-browser?commonjs-external"
+```
+
+The build fails, and you're left wondering what went wrong. The error message doesn't immediately point to the root cause, making it frustrating to debug.
+
+### Understanding the Error
+
+This error occurs when your bundler (Vite, Webpack, Rollup, etc.) attempts to resolve Prisma's client code for browser environments but encounters conflicts between server-side and client-side module resolution.
+
+The key issue is that **Prisma Client is designed to run on the server**, not in the browser. When you import Prisma enums directly in client-side code, your bundler tries to include server-only dependencies in the client bundle, leading to resolution conflicts.
+
+### Root Cause Analysis
+
+**Why Does This Happen?**
+
+1. **Prisma Client Architecture**: Prisma generates a client that includes database drivers and server-specific dependencies
+2. **Bundler Confusion**: When you import from `@prisma/client` in frontend code, the bundler attempts to resolve these server dependencies for the browser
+3. **Module Resolution Conflicts**: The browser version of Prisma client (`index-browser`) lacks the full server functionality, causing resolution failures
+
+### The Problematic Pattern
+
+```typescript
+// ❌ WRONG: This breaks production builds
+import { UserRole, PostStatus } from '@prisma/client'
+
+// In a Vue component, React component, or any client-side code
+const userRoles = Object.values(UserRole)
+const availableStatuses = [PostStatus.DRAFT, PostStatus.PUBLISHED]
+```
+
+This seems innocent and works in development because development servers often have more permissive module resolution. However, production builds are stricter and expose this architectural mismatch.
+
+### The Solution: Constants Pattern
+
+The solution I found is to create typed constant objects that mirror your Prisma enums without importing the actual Prisma client.
+
+**Step 1: Create Typed Constants**
+
+```typescript
+// constants/enums.ts
+import type { UserRole, PostStatus } from '@prisma/client' // ✅ Type-only import
+
+// Create runtime constants that satisfy the enum types
+export const USER_ROLES = {
+  ADMIN: 'ADMIN',
+  MODERATOR: 'MODERATOR',
+  USER: 'USER',
+} as const satisfies { [K in UserRole]: K }
+
+export const POST_STATUSES = {
+  DRAFT: 'DRAFT',
+  PUBLISHED: 'PUBLISHED',
+  ARCHIVED: 'ARCHIVED',
+} as const satisfies { [K in PostStatus]: K }
+
+// Type helpers for better DX
+export type UserRoleType = keyof typeof USER_ROLES
+export type PostStatusType = keyof typeof POST_STATUSES
+```
+
+**Step 2: Use Constants in Client Code**
+
+```typescript
+// ✅ CORRECT: Use constants in client-side code
+import { USER_ROLES, POST_STATUSES } from '~/constants/enums'
+import type { UserRole, PostStatus } from '@prisma/client' // Type-only import OK
+
+// Now you can safely use these in components
+const availableRoles = Object.values(USER_ROLES)
+const defaultStatus = POST_STATUSES.DRAFT
+
+// TypeScript still provides full type safety
+function updateUserRole(role: UserRole) {
+  // role is properly typed as 'ADMIN' | 'MODERATOR' | 'USER'
+  console.log(`Updating role to: ${role}`)
+}
+```
+
+**Step 3: Server-Side Usage Remains Unchanged**
+
+```typescript
+// server/api/users.ts - Server-side code can import directly
+import { UserRole, PostStatus } from '@prisma/client' // ✅ OK on server
+import { prisma } from '~/lib/prisma'
+
+export async function createUser(data: { role: UserRole }) {
+  return prisma.user.create({
+    data: {
+      role: UserRole.USER, // Direct enum usage OK on server
+      // ...other fields
+    },
+  })
+}
+```
+
+### Advanced Patterns
+
+**Generic Enum Helper**
+
+For projects with many enums, create a generic helper:
+
+```typescript
+// utils/enum-helpers.ts
+export function createEnumConstants<T extends Record<string, string>>(
+  enumType: T
+): { [K in keyof T]: T[K] } {
+  const constants = {} as { [K in keyof T]: T[K] }
+
+  for (const key in enumType) {
+    constants[key] = enumType[key]
+  }
+
+  return constants
+}
+
+// Usage with type assertion (use carefully)
+import type { UserRole } from '@prisma/client'
+
+export const USER_ROLES = createEnumConstants({
+  ADMIN: 'ADMIN',
+  MODERATOR: 'MODERATOR',
+  USER: 'USER',
+} as const satisfies { [K in UserRole]: K })
+```
+
+**Validation Helpers**
+
+Create validation functions using your constants:
+
+```typescript
+// utils/validators.ts
+import { USER_ROLES, POST_STATUSES } from '~/constants/enums'
+import type { UserRole, PostStatus } from '@prisma/client'
+
+export function isValidUserRole(value: string): value is UserRole {
+  return Object.values(USER_ROLES).includes(value as UserRole)
+}
+
+export function isValidPostStatus(value: string): value is PostStatus {
+  return Object.values(POST_STATUSES).includes(value as PostStatus)
+}
+```
+
+### Best Practices
+
+**1. Establish Clear Import Rules**
+
+Create linting rules or team conventions:
+
+```typescript
+// ✅ ALWAYS: Type-only imports from Prisma in client code
+import type { UserRole } from '@prisma/client'
+
+// ✅ ALWAYS: Runtime constants for client-side usage
+import { USER_ROLES } from '~/constants/enums'
+
+// ❌ NEVER: Direct enum imports in client code
+import { UserRole } from '@prisma/client'
+```
+
+**2. Maintain Consistency**
+
+Keep your constants in sync with your Prisma schema:
+
+```prisma
+// prisma/schema.prisma
+enum UserRole {
+  ADMIN
+  MODERATOR
+  USER
+}
+```
+
+```typescript
+// constants/enums.ts - Must match exactly
+export const USER_ROLES = {
+  ADMIN: 'ADMIN',
+  MODERATOR: 'MODERATOR',
+  USER: 'USER',
+} as const satisfies { [K in UserRole]: K }
+```
+
+**3. Use TypeScript for Safety**
+
+The `satisfies` operator ensures your constants match the Prisma enum exactly:
+
+```typescript
+// This will cause a TypeScript error if USER_ROLES doesn't match UserRole
+export const USER_ROLES = {
+  ADMIN: 'ADMIN',
+  MODERATOR: 'MODERATOR',
+  // USER: 'USER', // Missing - TypeScript error!
+} as const satisfies { [K in UserRole]: K }
+```
+
+**4. Organize Constants Logically**
+
+```
+constants/
+  ├── user.constants.ts      # User-related enums
+  ├── post.constants.ts      # Post-related enums
+  ├── order.constants.ts     # Order-related enums
+  └── index.ts               # Re-exports
+```
+
+### Common Pitfalls to Avoid
+
+**1. Importing in Shared Utilities**
+
+```typescript
+// ❌ WRONG: Utility used by both client and server
+import { UserRole } from '@prisma/client'
+
+export function formatUserRole(role: UserRole) {
+  return role.toLowerCase()
+}
+```
+
+```typescript
+// ✅ CORRECT: Use constants in shared utilities
+import { USER_ROLES } from '~/constants/enums'
+import type { UserRole } from '@prisma/client'
+
+export function formatUserRole(role: UserRole) {
+  return role.toLowerCase()
+}
+```
+
+**2. Forgetting Type-Only Imports**
+
+```typescript
+// ❌ WRONG: Runtime import for typing
+import { UserRole } from '@prisma/client'
+
+interface UserData {
+  role: UserRole // This pulls in runtime dependency
+}
+```
+
+```typescript
+// ✅ CORRECT: Type-only import
+import type { UserRole } from '@prisma/client'
+
+interface UserData {
+  role: UserRole // Only uses the type
+}
+```
+
+### Framework-Specific Considerations
+
+In framework applications, be especially careful with:
+
+**For Next.js:**
+
+- App Router has stricter server/client boundaries
+- Use `'use client'` directive carefully when dealing with enums
+
+**For SvelteKit:**
+
+- Server-only modules vs client-side code
+- Universal load functions
+
+**For other frameworks:**
+
+- Auto-imported composables that might use Prisma enums
+- Server-side rendering contexts
+- Universal code that runs on both server and client
+
+### Debugging Tips
+
+**1. Check Your Imports**
+
+Search your codebase for problematic imports:
+
+```bash
+# Find direct Prisma client imports in client code
+grep -r "from '@prisma/client'" src/components src/pages src/composables
+
+# Look for non-type imports
+grep -r "import {.*} from '@prisma/client'" src/
+```
+
+**2. Build Analysis**
+
+Most bundlers provide build analysis:
+
+```bash
+# Analyze what's being bundled
+npm run build:analyze
+
+# Look for unexpected Prisma dependencies in client bundle
+```
+
+**3. Enable Verbose Logging**
+
+```javascript
+// vite.config.js or build config
+export default {
+  build: {
+    rollupOptions: {
+      logLevel: 'debug',
+    },
+  },
+}
+```
+
+### Performance Benefits
+
+Beyond fixing build errors, this pattern provides performance benefits:
+
+1. **Smaller Bundle Size**: Avoids including server dependencies in client bundles
+2. **Faster Build Times**: Reduces complex dependency resolution
+3. **Better Tree Shaking**: Constants are easier for bundlers to optimize
+
+### Migration Strategy
+
+If you have an existing codebase with this issue:
+
+**1. Identify Problem Areas**
+
+```bash
+# Find all direct Prisma imports
+grep -r "from '@prisma/client'" src/ --include="*.ts" --include="*.vue" --include="*.tsx"
+```
+
+**2. Create Constants First**
+Start by creating all necessary constant files.
+
+**3. Migrate Incrementally**
+Replace imports file by file, testing builds along the way.
+
+**4. Add Linting Rules**
+Prevent regression with ESLint rules:
+
+```javascript
+// .eslintrc.js
+module.exports = {
+  rules: {
+    'no-restricted-imports': [
+      'error',
+      {
+        paths: [
+          {
+            name: '@prisma/client',
+            importNames: ['UserRole', 'PostStatus'], // Add your enums
+            message: 'Use constants from ~/constants/enums instead',
+          },
+        ],
+      },
+    ],
+  },
+}
+```
+
+### Conclusion
+
+The Prisma enum import issue is a common but solvable problem that stems from the architectural difference between server-side ORMs and client-side bundlers. By establishing clear patterns for enum usage—using type-only imports and runtime constants—you can avoid build failures while maintaining type safety and code clarity.
+
+**Key takeaways:**
+
+1. **Never import Prisma enums directly in client-side code**
+2. **Use type-only imports for TypeScript typing**
+3. **Create typed constants for runtime usage**
+4. **Maintain consistency between schema and constants**
+5. **Establish team conventions and linting rules**
+
+This pattern not only solves the immediate build issue but also creates a more maintainable architecture that clearly separates server-side database concerns from client-side application logic.
+
+By following these practices, you'll build more robust applications that work consistently across development and production environments, while maintaining the full power of TypeScript's type system and Prisma's developer experience.
+
+Hopefully, this helps someone else dealing with similar challenges! ✨
