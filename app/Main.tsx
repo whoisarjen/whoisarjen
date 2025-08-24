@@ -4,7 +4,8 @@ import { formatDate } from 'pliny/utils/formatDate'
 import NewsletterForm from 'pliny/ui/NewsletterForm'
 import Image from '@/components/Image'
 
-const MAX_DISPLAY = 6
+const MAX_POSTS_DISPLAY = 10
+const MAX_PROJECTS_DISPLAY = 6
 
 export default function Home({ posts, projects }) {
   return (
@@ -28,7 +29,7 @@ export default function Home({ posts, projects }) {
           </h2>
           <ul className="grid gap-8 sm:grid-cols-2 lg:grid-cols-3">
             {projects.length === 0 && <p>No projects found.</p>}
-            {projects.slice(0, MAX_DISPLAY).map((project) => (
+            {projects.slice(0, MAX_PROJECTS_DISPLAY).map((project) => (
               <li
                 key={project.slug}
                 className="overflow-hidden rounded-lg bg-white shadow-md dark:bg-gray-800"
@@ -50,7 +51,7 @@ export default function Home({ posts, projects }) {
               </li>
             ))}
           </ul>
-          {projects.length > MAX_DISPLAY && (
+          {projects.length > MAX_PROJECTS_DISPLAY && (
             <div className="flex pt-4 text-base font-medium leading-6">
               <Link
                 href="/projects"
@@ -69,7 +70,7 @@ export default function Home({ posts, projects }) {
           </h2>
           <ul className="divide-y divide-gray-200 dark:divide-gray-700">
             {!posts.length && <p>No posts found.</p>}
-            {posts.slice(0, MAX_DISPLAY).map((post) => {
+            {posts.slice(0, MAX_POSTS_DISPLAY).map((post) => {
               const { slug, date, title, summary } = post
               return (
                 <li key={slug} className="py-8">
@@ -107,7 +108,7 @@ export default function Home({ posts, projects }) {
               )
             })}
           </ul>
-          {posts.length > MAX_DISPLAY && (
+          {posts.length > MAX_POSTS_DISPLAY && (
             <div className="flex justify-end pt-4 text-base font-medium leading-6">
               <Link
                 href="/blog"
