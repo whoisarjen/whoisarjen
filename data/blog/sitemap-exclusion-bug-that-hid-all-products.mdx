@@ -1,0 +1,167 @@
+---
+title: 'The Sitemap Bug That Hid All Our Products From Google'
+date: 2025-04-15T10:00:00Z
+lastmod: '2025-04-15'
+summary: 'How a 10-line configuration silently blocked thousands of product pages from Google indexing, and the surprising nuxtjs/sitemap behavior that caused it.'
+tags: ['SEO', 'Nuxt 3', 'Sitemap', 'Debugging', 'i18n']
+---
+
+## The Discovery: Where Did All Our Products Go?
+
+Last week I was checking our Google Search Console when something felt off. Our e-commerce site has thousands of products, hundreds of news articles, dozens of inspiration pages—but the indexed page count was suspiciously low.
+
+I pulled up our sitemap at `/sitemap.xml` and started digging. That's when I noticed something strange: **only our collection pages were appearing in the sitemap**. Products, news, inspirations, categories, designers—all missing.
+
+We serve 11 international markets with localized URLs. Thousands of pages, just... gone from Google's radar.
+
+## The Investigation: A Simple Exclude List
+
+Our `nuxt.config.ts` had what looked like a reasonable sitemap configuration:
+
+```typescript
+// nuxt.config.ts - The problematic configuration
+sitemap: {
+  exclude: [
+    '/dashboard/**',
+    '/product/**',
+    '/news/**',
+    '/faq/**',
+    '/inspirations/**',
+    '/bathroom/**',
+    '/kitchen/**',
+    '/designers/**',
+    '/list-of-landings/**',
+    '/satisfaction-survey/**',
+    '/clipboard',
+  ],
+  cacheMaxAgeSeconds: 86400,
+}
+```
+
+Wait, why were we excluding `/product/**`? That seemed wrong. But here's where it got interesting—those exclusions were originally added to prevent _dynamic route generation_ for pages that had their own sitemap sources.
+
+The thinking was: "Don't auto-generate these URLs because we're adding them manually via sitemap sources." Reasonable, right?
+
+Wrong.
+
+## The Root Cause: Nuxt Sitemap's Hidden i18n Behavior
+
+Here's what the `@nuxtjs/sitemap` module does that isn't immediately obvious from the documentation:
+
+**When you have i18n configured, exclude patterns are automatically expanded to all language prefixes.**
+
+So this:
+
+```typescript
+exclude: ['/product/**']
+```
+
+Silently becomes this:
+
+```typescript
+exclude: [
+  '/product/**', // Polish (default, no prefix)
+  '/en/product/**', // English
+  '/de/product/**', // German
+  '/uk/product/**', // Ukrainian
+  '/ru/product/**', // Russian
+  '/hu/product/**', // Hungarian
+  '/ro/product/**', // Romanian
+  '/fr/product/**', // French
+  '/sl/product/**', // Slovenian
+  '/it/product/**', // Italian
+  '/es/product/**', // Spanish
+]
+```
+
+Every single product URL—in every language—was being excluded from the sitemap. The same for news, inspirations, categories, and everything else in that list.
+
+## Why Collections Still Worked
+
+One clue helped me crack this: collections _were_ appearing in the sitemap. Why?
+
+Collections use a Polish path structure: `/kolekcja/[name]` instead of `/collection/[name]`. Since `/kolekcja/**` wasn't in the exclude list, those URLs survived.
+
+This was the "aha" moment. The exclusion wasn't failing silently—it was working exactly as designed. We just didn't realize what it was designed to do.
+
+## The Fix: 9 Lines Deleted
+
+The solution was embarrassingly simple:
+
+```typescript
+// nuxt.config.ts - The fixed configuration
+sitemap: {
+  exclude: [
+    '/dashboard/**',
+    '/panel/**',
+    '/clipboard',
+  ],
+  cacheMaxAgeSeconds: 86400,
+}
+```
+
+That's it. Remove the overly broad exclusions. Keep only the admin panels and utility pages that genuinely shouldn't be indexed.
+
+**9 lines deleted. Thousands of pages restored to Google.**
+
+## The Aftermath
+
+After deploying the fix:
+
+- Sitemap regenerated with all product URLs across 11 languages
+- News, inspirations, categories, and designers all restored
+- Google Search Console started showing the expected page count
+- Re-indexing requests submitted for priority pages
+
+The site had been running with this misconfiguration for weeks. That's weeks of new products, new articles, and new content that Google couldn't see.
+
+## Lessons Learned
+
+### 1. Sitemap Exclusions Are More Powerful Than They Look
+
+In a multi-language Nuxt app, one exclude pattern multiplies by your language count. Be extremely careful with wildcards.
+
+### 2. Test Your Sitemap Manually
+
+I should have been checking `/sitemap.xml` regularly. A simple visual inspection would have caught this immediately.
+
+### 3. Question Inherited Configurations
+
+This exclude list was added months ago with good intentions. But the original context was lost, and no one questioned whether it still made sense.
+
+### 4. The "It Works Locally" Trap
+
+In development, you might not notice sitemap issues because you're not checking SEO tooling. This bug only became visible when examining production SEO performance.
+
+## How to Verify Your Sitemap
+
+Quick checks you can do right now:
+
+```bash
+# Fetch your sitemap and count URLs
+curl -s https://yoursite.com/sitemap.xml | grep -c "<loc>"
+
+# Check for a specific path that should exist
+curl -s https://yoursite.com/sitemap.xml | grep "product"
+
+# If using sitemap index, check individual sitemaps
+curl -s https://yoursite.com/sitemap_index.xml
+```
+
+In Nuxt with i18n, your sitemap index should contain separate sitemaps for each language:
+
+- `/en-sitemap.xml`
+- `/de-sitemap.xml`
+- etc.
+
+Make sure URLs appear in ALL of them, not just the default language.
+
+## The Takeaway
+
+Sometimes the biggest SEO disasters come from the smallest configuration changes. A 10-line exclude list, added with good intentions, silently blocked thousands of pages from search engines for weeks.
+
+If your indexed page count seems low, check your sitemap configuration first. And remember: in multi-language Nuxt apps, exclude patterns are way more aggressive than they appear.
+
+---
+
+_Real debugging story from an e-commerce platform serving 11 European markets. The fix took 2 minutes. Finding it took much longer._

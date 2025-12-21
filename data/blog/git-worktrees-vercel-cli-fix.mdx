@@ -1,0 +1,348 @@
+---
+title: 'Git Worktrees + Vercel CLI: Fixing the Incompatibility'
+date: 2025-05-28T15:00:00Z
+lastmod: '2025-05-28'
+summary: 'Git worktrees are amazing for parallel development, but Vercel CLI breaks in them. Here is the fix for Nuxt monorepo projects.'
+tags: ['Git', 'Worktrees', 'Vercel', 'Monorepo', 'Turbo', 'Productivity']
+---
+
+## Why Git Worktrees Are Amazing
+
+Git worktrees let you work on multiple branches simultaneously without stashing or switching. Each worktree is a full working directory with its own branch:
+
+```bash
+# Main repo on 'dev'
+~/project/
+
+# Worktree for feature work
+~/project-feature-auth/
+
+# Worktree for bug fix
+~/project-bugfix-123/
+```
+
+For monorepo development, this is transformative. You can:
+
+- Run tests on one branch while coding on another
+- Compare implementations side-by-side
+- Context-switch without losing state
+
+## The Problem: Vercel CLI Breaks in Worktrees
+
+We use `vercel env pull` in our dev script to grab environment variables:
+
+```json
+{
+  "scripts": {
+    "dev": "vercel env pull .env -y --environment=development && nuxt dev"
+  }
+}
+```
+
+In a regular repo, this works fine. In a git worktree, it fails:
+
+```bash
+$ npm run dev
+
+Error: Could not read from .git/config
+```
+
+### Why It Fails
+
+The key difference is how `.git` works:
+
+**Regular repo:**
+
+```
+.git/          ← Directory containing git internals
+  config       ← Vercel reads this
+  HEAD
+  objects/
+  ...
+```
+
+**Git worktree:**
+
+```
+.git           ← File (not directory!) pointing to main repo
+# Contents: "gitdir: /path/to/main/repo/.git/worktrees/feature-name"
+```
+
+Vercel CLI tries to read `.git/config` as if `.git` were a directory. In a worktree, it's a file, so the path doesn't exist.
+
+## The Solution: Bypass Vercel CLI in Worktrees
+
+Create a separate dev script that skips `vercel env pull`:
+
+### Step 1: Add dev:worktree Script
+
+```json
+// package.json
+{
+  "scripts": {
+    "dev": "vercel env pull .env -y --environment=development && nuxt dev --port 3000",
+    "dev:worktree": "npx prisma generate && nuxt dev --port 3000"
+  }
+}
+```
+
+The worktree script:
+
+1. Skips `vercel env pull` (use pre-copied .env)
+2. Regenerates Prisma client (in case schema changed)
+3. Starts dev server normally
+
+### Step 2: Configure Turbo (Monorepo)
+
+If you're using Turborepo, add the new task:
+
+```json
+// turbo.json
+{
+  "tasks": {
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "dev:worktree": {
+      "cache": false,
+      "persistent": true
+    }
+  }
+}
+```
+
+### Step 3: All Apps Need the Script
+
+Each app in your monorepo needs the worktree script:
+
+```json
+// apps/main-app/package.json
+{
+  "scripts": {
+    "dev": "vercel env pull .env -y --environment=development && nuxt dev --port 3000",
+    "dev:worktree": "npx prisma generate && nuxt dev --port 3000"
+  }
+}
+
+// apps/admin/package.json
+{
+  "scripts": {
+    "dev": "vercel env pull .env -y --environment=development && nuxt dev --port 3001",
+    "dev:worktree": "npx prisma generate --schema=../main-app/prisma/schema.prisma && nuxt dev --port 3001"
+  }
+}
+
+// apps/docs/package.json
+{
+  "scripts": {
+    "dev": "nuxt dev --port 3002",
+    "dev:worktree": "echo 'docs - skipped in worktree mode'"
+  }
+}
+```
+
+### Step 4: Root Package Script
+
+```json
+// package.json (root)
+{
+  "scripts": {
+    "dev": "turbo run dev",
+    "dev:worktree": "turbo run dev:worktree"
+  }
+}
+```
+
+## Setting Up a New Worktree
+
+Here's my workflow for creating a worktree:
+
+### 1. Create the Worktree
+
+```bash
+# From main repo directory
+git worktree add ../project-feature-name -b feature/branch-name
+```
+
+This creates:
+
+- A new directory `../project-feature-name`
+- A new branch `feature/branch-name`
+- A checkout of the code in that directory
+
+### 2. Copy Essential Files
+
+Worktrees don't copy ignored files. You need:
+
+- `node_modules/` (or reinstall)
+- `.env` (copy from main repo)
+- `.nuxt/`, `.output/` (regenerated)
+
+I use a `.worktreeinclude` file to track what to copy:
+
+```plaintext
+# .worktreeinclude
+node_modules
+.env
+.nuxt
+.output
+.turbo
+```
+
+Then a quick script:
+
+```bash
+#!/bin/bash
+# scripts/setup-worktree.sh
+SOURCE_DIR="$1"
+TARGET_DIR="$2"
+
+while read -r file; do
+  if [ -e "$SOURCE_DIR/$file" ]; then
+    cp -r "$SOURCE_DIR/$file" "$TARGET_DIR/$file"
+  fi
+done < "$SOURCE_DIR/.worktreeinclude"
+```
+
+### 3. Run Dev in Worktree
+
+```bash
+cd ../project-feature-name
+npm run dev:worktree
+```
+
+## Managing Multiple Worktrees
+
+### List All Worktrees
+
+```bash
+git worktree list
+# /Users/you/project          abc1234 [dev]
+# /Users/you/project-feature  def5678 [feature/auth]
+# /Users/you/project-bugfix   ghi9012 [fix/issue-123]
+```
+
+### Remove a Worktree
+
+When done with a feature:
+
+```bash
+# Remove the worktree directory
+git worktree remove ../project-feature-name
+
+# If you also want to delete the branch
+git branch -d feature/branch-name
+```
+
+### Prune Stale Worktrees
+
+If you manually deleted a worktree directory:
+
+```bash
+git worktree prune
+```
+
+## Common Issues
+
+### Port Conflicts
+
+Each worktree runs its own dev server. Use different ports:
+
+```json
+// Main repo
+"dev:worktree": "nuxt dev --port 3000"
+
+// Worktree 1
+"dev:worktree": "nuxt dev --port 3010"
+
+// Worktree 2
+"dev:worktree": "nuxt dev --port 3020"
+```
+
+Or dynamically via environment:
+
+```bash
+PORT=3010 npm run dev:worktree
+```
+
+### Prisma Client Issues
+
+Each worktree needs its own Prisma client generation:
+
+```bash
+cd ../project-feature-name
+npx prisma generate
+```
+
+That's why `dev:worktree` includes `npx prisma generate`.
+
+### Database Migrations
+
+Be careful with migrations in worktrees. If you're on different branches with different schemas:
+
+1. Use a separate database for experimental branches
+2. Or sync schemas before switching between worktrees
+
+## Why Not Just Use Branches?
+
+Switching branches:
+
+- Kills your dev server
+- Loses unsaved state in editors
+- Rebuilds everything from scratch
+
+With worktrees:
+
+- Each branch has its own dev server running
+- Open multiple VS Code windows
+- Instant context switching
+
+For a monorepo where `npm run dev` takes 30+ seconds to start, worktrees save hours of productivity.
+
+## The Final Setup
+
+```plaintext
+~/project/                    # Main repo (dev branch)
+  ├── package.json           # dev & dev:worktree scripts
+  ├── turbo.json            # Both tasks configured
+  ├── .worktreeinclude      # Files to copy to new worktrees
+  └── apps/
+      └── main-app/
+          └── package.json   # App-specific worktree script
+
+~/project-feature-auth/       # Worktree (feature/auth branch)
+  ├── node_modules/          # Copied from main
+  ├── .env                   # Copied from main
+  └── apps/
+      └── main-app/
+          └── .nuxt/         # Regenerated
+
+~/project-bugfix-123/         # Another worktree
+  └── ...
+```
+
+## Quick Reference
+
+```bash
+# Create worktree with new branch
+git worktree add ../project-name -b feature/name
+
+# Create worktree on existing branch
+git worktree add ../project-name existing-branch
+
+# List worktrees
+git worktree list
+
+# Remove worktree
+git worktree remove ../project-name
+
+# Run dev in worktree
+cd ../project-name && npm run dev:worktree
+```
+
+The one-time setup takes 10 minutes. The productivity gain is permanent.
+
+---
+
+_Real workflow from a Nuxt 3 monorepo with Turborepo and Vercel. Multiple features developed in parallel without branch switching._

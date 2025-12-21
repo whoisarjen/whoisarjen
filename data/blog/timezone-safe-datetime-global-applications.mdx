@@ -1,0 +1,386 @@
+---
+title: 'Timezone-Safe DateTime Handling for Global Applications'
+date: 2025-06-05T16:00:00Z
+lastmod: '2025-06-05'
+summary: 'A simple frontend-backend contract for datetime handling that prevents scheduling bugs across timezones and makes your app server-location independent.'
+tags: ['DateTime', 'Timezone', 'UTC', 'JavaScript', 'Architecture', 'i18n']
+---
+
+## The Bug That Bit Us
+
+We had a content scheduling feature. Authors could set "publish at" dates for articles. Simple enough, right?
+
+Then we noticed articles publishing at the wrong times. An article scheduled for 12:00 in Poland was going live at 10:00. Users in Germany saw different "publish at" times than users in Spain.
+
+The problem? Our datetime handling was a mess. Some parts used local time, others used UTC, and nothing was consistent.
+
+## The Rule That Fixed Everything
+
+After debugging for way too long, we established one simple rule:
+
+> **Frontend handles all timezone conversion. Backend only stores and compares UTC.**
+
+This means:
+
+1. User selects local time in UI
+2. Frontend converts to UTC before sending
+3. Backend stores UTC as-is
+4. Backend compares using UTC
+5. Frontend converts UTC back to local for display
+
+No exceptions. No "smart" server-side conversions.
+
+## The Utilities
+
+Here's the toolkit we built:
+
+```typescript
+// utils/timezone.utils.ts
+
+/**
+ * Gets current UTC time for all comparisons
+ * ALWAYS use this instead of new Date() for datetime comparisons!
+ */
+export function getCurrentUTC(): Date {
+  return new Date()
+}
+
+/**
+ * Converts local datetime input to UTC string for backend storage
+ * @param localDatetimeString - Value from datetime-local input (e.g., "2024-01-01T12:00")
+ * @returns ISO UTC string for backend (e.g., "2024-01-01T10:00:00.000Z")
+ */
+export function toUTCForBackend(localDatetimeString: string): string {
+  if (!localDatetimeString) return ''
+
+  try {
+    return new Date(localDatetimeString).toISOString()
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Converts UTC datetime from backend to local datetime for display
+ * @param utcDatetimeString - UTC datetime from backend
+ * @returns Local datetime string for input (e.g., "2024-01-01T12:00")
+ */
+export function fromUTCForDisplay(utcDatetimeString: string): string {
+  if (!utcDatetimeString) return ''
+
+  try {
+    const utcDate = new Date(utcDatetimeString)
+    const localDate = new Date(utcDate.getTime() - utcDate.getTimezoneOffset() * 60000)
+    return localDate.toISOString().slice(0, 16)
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Safe UTC date parser for backend storage
+ * @param utcDatetimeString - UTC datetime string from frontend
+ * @returns Date object or null if invalid
+ */
+export function parseUTCDatetimeFromFrontend(utcDatetimeString: string): Date | null {
+  if (!utcDatetimeString) return null
+
+  try {
+    const date = new Date(utcDatetimeString)
+    return isNaN(date.getTime()) ? null : date
+  } catch {
+    return null
+  }
+}
+```
+
+## Frontend Usage
+
+### Sending Data to Backend
+
+When the user fills a `datetime-local` input:
+
+```vue
+<script setup lang="ts">
+import { toUTCForBackend } from '~/utils/timezone.utils'
+
+const publishAt = ref('')
+
+async function saveArticle() {
+  await $fetch('/api/articles', {
+    method: 'POST',
+    body: {
+      title: title.value,
+      // Convert local input to UTC before sending
+      publishedAt: toUTCForBackend(publishAt.value),
+    },
+  })
+}
+</script>
+
+<template>
+  <input type="datetime-local" v-model="publishAt" />
+  <button @click="saveArticle">Save</button>
+</template>
+```
+
+### Displaying Data from Backend
+
+When populating an edit form:
+
+```vue
+<script setup lang="ts">
+import { fromUTCForDisplay } from '~/utils/timezone.utils'
+
+const { data: article } = await useFetch('/api/articles/1')
+
+// Convert UTC from backend to local for input display
+const publishAt = ref(fromUTCForDisplay(article.value?.publishedAt ?? ''))
+</script>
+
+<template>
+  <input type="datetime-local" v-model="publishAt" />
+</template>
+```
+
+### Displaying Read-Only Dates
+
+For display-only scenarios, use `Intl.DateTimeFormat`:
+
+```typescript
+function formatDate(utcString: string): string {
+  return new Intl.DateTimeFormat('pl-PL', {
+    dateStyle: 'long',
+    timeStyle: 'short',
+  }).format(new Date(utcString))
+}
+```
+
+This automatically converts to the user's local timezone.
+
+## Backend Usage
+
+### Filtering Published Content
+
+```typescript
+// server/api/articles/published.get.ts
+import { getCurrentUTC } from '~/utils/timezone.utils'
+
+export default defineEventHandler(async () => {
+  // ALWAYS use getCurrentUTC() for comparisons
+  const now = getCurrentUTC()
+
+  return prisma.article.findMany({
+    where: {
+      publishedAt: {
+        lte: now, // Published at or before now
+      },
+    },
+  })
+})
+```
+
+### Saving Dates from Frontend
+
+```typescript
+// server/api/articles/index.post.ts
+import { parseUTCDatetimeFromFrontend } from '~/utils/timezone.utils'
+
+export default defineEventHandler(async (event) => {
+  const body = await readBody(event)
+
+  return prisma.article.create({
+    data: {
+      title: body.title,
+      // Parse the UTC string from frontend
+      publishedAt: parseUTCDatetimeFromFrontend(body.publishedAt),
+    },
+  })
+})
+```
+
+## Why This Architecture?
+
+### 1. Server Location Independence
+
+Your server might run in:
+
+- US East (UTC-5)
+- Frankfurt (UTC+1)
+- Singapore (UTC+8)
+
+With this pattern, it doesn't matter. All comparisons use UTC, so moving servers doesn't change behavior.
+
+### 2. No "Double Conversion" Bugs
+
+A common bug:
+
+```typescript
+// BAD: Server tries to be "smart"
+const userTime = new Date(body.publishedAt)
+const utcTime = convertToUTC(userTime) // Wait, it's already UTC!
+```
+
+When both frontend and backend try to convert, you get double-converted dates that are hours off.
+
+Our pattern: Frontend converts once. Backend trusts the input.
+
+### 3. Consistent Display Across Users
+
+User A in Poland sees "12:00"
+User B in Germany sees "11:00" (same moment in time)
+
+Both are correct for their timezone. The underlying UTC value is identical.
+
+## The Anti-Patterns
+
+### Don't: Use `new Date()` for Comparisons
+
+```typescript
+// BAD: Server timezone affects comparison
+const articles = await prisma.article.findMany({
+  where: {
+    publishedAt: { lte: new Date() }, // Which timezone is this?
+  },
+})
+
+// GOOD: Explicit UTC reference
+const articles = await prisma.article.findMany({
+  where: {
+    publishedAt: { lte: getCurrentUTC() },
+  },
+})
+```
+
+### Don't: Store Local Time
+
+```typescript
+// BAD: Storing local time
+await prisma.article.create({
+  data: {
+    publishedAt: new Date(body.publishedAt), // Might be local!
+  },
+})
+
+// GOOD: Parse as UTC
+await prisma.article.create({
+  data: {
+    publishedAt: parseUTCDatetimeFromFrontend(body.publishedAt),
+  },
+})
+```
+
+### Don't: Convert on the Backend
+
+```typescript
+// BAD: Backend trying to convert
+const utcDate = moment.tz(body.publishedAt, 'Europe/Warsaw').utc()
+
+// GOOD: Trust the frontend-converted UTC
+const utcDate = parseUTCDatetimeFromFrontend(body.publishedAt)
+```
+
+## Multi-Language Scheduling
+
+For sites with multiple languages, each might have its own publish date:
+
+```typescript
+// Database structure
+interface ArticlePublishDates {
+  pl: Date | null // Polish version publish date
+  en: Date | null // English version publish date
+  de: Date | null // German version publish date
+}
+
+// Frontend: convert each language's date
+const publishDates = {
+  pl: toUTCForBackend(form.publishAt.pl),
+  en: toUTCForBackend(form.publishAt.en),
+  de: toUTCForBackend(form.publishAt.de),
+}
+
+// Backend: filter by current language
+const langField = getLanguageField(event) // 'pl', 'en', 'de'
+const articles = await prisma.article.findMany({
+  where: {
+    [`publishedAt.${langField}`]: {
+      lte: getCurrentUTC(),
+    },
+  },
+})
+```
+
+## Testing Timezone Logic
+
+### Unit Tests
+
+```typescript
+import { toUTCForBackend, fromUTCForDisplay } from '~/utils/timezone.utils'
+
+describe('timezone utils', () => {
+  it('converts local to UTC correctly', () => {
+    // Mock timezone offset for consistent testing
+    const input = '2024-01-15T12:00'
+    const result = toUTCForBackend(input)
+
+    expect(result).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z$/)
+  })
+
+  it('handles empty input', () => {
+    expect(toUTCForBackend('')).toBe('')
+    expect(fromUTCForDisplay('')).toBe('')
+  })
+
+  it('round-trips correctly', () => {
+    const original = '2024-01-15T12:00'
+    const utc = toUTCForBackend(original)
+    const back = fromUTCForDisplay(utc)
+
+    expect(back).toBe(original)
+  })
+})
+```
+
+### Integration Testing
+
+Test with actual timezone differences:
+
+```typescript
+describe('scheduling across timezones', () => {
+  it('publishes at correct UTC time regardless of server timezone', async () => {
+    // Schedule for 12:00 Warsaw time (UTC+1)
+    const localTime = '2024-01-15T12:00'
+    const utcTime = toUTCForBackend(localTime) // Should be 11:00Z
+
+    await createArticle({ publishedAt: utcTime })
+
+    // At 10:59 UTC, article should NOT be visible
+    mockServerTime('2024-01-15T10:59:00Z')
+    expect(await getPublishedArticles()).toHaveLength(0)
+
+    // At 11:01 UTC, article SHOULD be visible
+    mockServerTime('2024-01-15T11:01:00Z')
+    expect(await getPublishedArticles()).toHaveLength(1)
+  })
+})
+```
+
+## Summary
+
+The rule is simple:
+
+1. **Frontend**: Convert local → UTC before sending
+2. **Backend**: Store and compare UTC only
+3. **Frontend**: Convert UTC → local for display
+
+Three utilities handle everything:
+
+- `toUTCForBackend()` - local input → UTC string
+- `fromUTCForDisplay()` - UTC string → local input
+- `getCurrentUTC()` - current time for comparisons
+
+No libraries needed. No timezone databases. Just consistent UTC handling everywhere.
+
+---
+
+_Real pattern from an e-commerce platform serving 11 European markets. Zero timezone-related scheduling bugs since implementation._

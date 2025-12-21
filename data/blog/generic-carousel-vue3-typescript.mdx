@@ -1,0 +1,474 @@
+---
+title: 'Building a Generic Carousel Component with Vue 3 and TypeScript'
+date: 2025-07-01T19:00:00Z
+lastmod: '2025-07-01'
+summary: 'How to use Vue 3 generics to create a type-safe, multi-variant carousel component that handles products, banners, zones, and more without code duplication.'
+tags: ['Vue 3', 'TypeScript', 'Components', 'Generics', 'Carousel']
+---
+
+## The Problem: Too Many Carousel Components
+
+Our e-commerce site needed carousels everywhere:
+
+- Product carousels (4 items visible, responsive)
+- Hero banners (1 item visible, autoplay)
+- Zone/category carousels (variable width items)
+- Finish selector (horizontal scroll, tiny items)
+
+The naive approach: create 4 different carousel components. The result: duplicated logic, inconsistent behavior, maintenance nightmare.
+
+## The Solution: Vue 3 Generics
+
+Vue 3.3 introduced the `generic` attribute for script setup. This lets you create truly type-safe generic components:
+
+```vue
+<script setup lang="ts" generic="T">
+type Props = {
+  items: readonly T[]
+  // ... other props
+}
+
+const props = defineProps<Props>()
+</script>
+```
+
+Now the component accepts any array type, and TypeScript knows what `T` is throughout the template and slots.
+
+## Component Architecture
+
+Here's the core structure:
+
+```vue
+<script setup lang="ts" generic="T">
+type SlideConfig = 'default' | 'zones' | 'banner' | 'finishes'
+
+type AutoplayConfig = {
+  delay?: number
+  pauseOnHover?: boolean
+}
+
+type Props = {
+  title?: string
+  items: readonly T[]
+  isLoading?: boolean
+  itemHeight?: string
+  variant?: SlideConfig
+  autoplay?: boolean | AutoplayConfig
+  loop?: boolean
+  showNavigation?: boolean
+  showPagination?: boolean
+  navigationStyle?: 'default' | 'circular-white'
+  navigationPosition?: 'top' | 'bottom'
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  isLoading: false,
+  itemHeight: '450px',
+  variant: 'default',
+  autoplay: false,
+  loop: false,
+  showNavigation: true,
+  showPagination: false,
+  navigationStyle: 'default',
+  navigationPosition: 'top',
+})
+</script>
+```
+
+### Key Design Decisions
+
+**1. `readonly T[]` instead of `T[]`**
+
+```typescript
+items: readonly T[];
+```
+
+This prevents accidental mutation of the items array and allows passing `as const` arrays.
+
+**2. Variant-Based Configuration**
+
+Instead of dozens of boolean props, we use a `variant` that bundles related settings:
+
+```typescript
+type SlideConfig = 'default' | 'zones' | 'banner' | 'finishes'
+```
+
+Each variant implies a set of defaults:
+
+- `banner`: Full width, autoplay, pagination
+- `zones`: Partial width, many visible items
+- `finishes`: Tiny items, horizontal scroll
+
+**3. Flexible Autoplay Config**
+
+```typescript
+autoplay?: boolean | AutoplayConfig;
+```
+
+Simple usage:
+
+```vue
+<CustomCarousel :items="products" autoplay />
+```
+
+Detailed control:
+
+```vue
+<CustomCarousel :items="banners" :autoplay="{ delay: 8000, pauseOnHover: false }" />
+```
+
+## Variant-Based Styling
+
+Each variant needs different slide widths:
+
+```typescript
+const slideClasses = computed(() => {
+  switch (props.variant) {
+    case 'banner':
+      return 'w-full'
+    case 'zones':
+      return 'w-[85%] sm:w-[45%] md:w-[30%] xl:w-[23%]'
+    case 'finishes':
+      return 'w-auto flex-shrink-0'
+    default:
+      return 'w-[85%] sm:w-[45%] md:w-[30%] xl:w-[22%]'
+  }
+})
+```
+
+Responsive breakpoints ensure the right number of items are visible on each screen size.
+
+## Scroll-Based Navigation
+
+Instead of complex libraries, we use native scroll:
+
+```typescript
+const carouselRef = ref<HTMLElement | null>(null)
+const currentSlide = ref(0)
+
+const scrollToSlide = (index: number, smooth = true) => {
+  if (!carouselRef.value) return
+
+  const slideWidth = carouselRef.value.clientWidth
+  carouselRef.value.scrollTo({
+    left: slideWidth * index,
+    behavior: smooth ? 'smooth' : 'auto',
+  })
+}
+
+const scrollToDirection = (direction: 'left' | 'right') => {
+  if (!carouselRef.value) return
+
+  if (isBannerMode.value) {
+    // Banner: snap to slides
+    const nextSlide =
+      direction === 'right'
+        ? (currentSlide.value + 1) % props.items.length
+        : (currentSlide.value - 1 + props.items.length) % props.items.length
+    scrollToSlide(nextSlide)
+  } else {
+    // Grid: scroll by viewport width
+    const scrollAmount = carouselRef.value.clientWidth
+    carouselRef.value.scrollBy({
+      left: direction === 'right' ? scrollAmount : -scrollAmount,
+      behavior: 'smooth',
+    })
+  }
+}
+```
+
+CSS handles the scroll snapping:
+
+```vue
+<template>
+  <div
+    ref="carouselRef"
+    class="flex gap-4 overflow-x-auto scroll-smooth"
+    :class="{ 'snap-x snap-mandatory': isBannerMode }"
+    @scroll="updateCurrentSlide"
+  >
+    <div
+      v-for="(item, index) in items"
+      :key="index"
+      :class="[slideClasses, { 'snap-center': isBannerMode }]"
+    >
+      <slot :item="item" :index="index" />
+    </div>
+  </div>
+</template>
+```
+
+## Autoplay Implementation
+
+```typescript
+const autoplayInterval = ref<NodeJS.Timeout | null>(null)
+const isHovered = ref(false)
+const progressKey = ref(0)
+
+const autoplayConfig = computed<AutoplayConfig>(() => {
+  if (typeof props.autoplay === 'boolean') {
+    return props.autoplay ? { delay: 6000, pauseOnHover: true } : { delay: 0 }
+  }
+  return { delay: 6000, pauseOnHover: true, ...props.autoplay }
+})
+
+const startAutoplay = () => {
+  if (!autoplayConfig.value.delay) return
+  if (!isBannerMode.value) return
+  if (props.items.length <= 1) return
+
+  stopAutoplay()
+  progressKey.value++ // Reset progress animation
+
+  autoplayInterval.value = setInterval(() => {
+    if (!isHovered.value || !autoplayConfig.value.pauseOnHover) {
+      const nextSlide = (currentSlide.value + 1) % props.items.length
+      scrollToSlide(nextSlide)
+      progressKey.value++
+    }
+  }, autoplayConfig.value.delay)
+}
+
+const stopAutoplay = () => {
+  if (autoplayInterval.value) {
+    clearInterval(autoplayInterval.value)
+    autoplayInterval.value = null
+  }
+}
+
+// Start autoplay when mounted, stop on unmount
+onMounted(() => startAutoplay())
+onUnmounted(() => stopAutoplay())
+```
+
+## Typed Scoped Slots
+
+The generic `T` flows through to the slot:
+
+```vue
+<template>
+  <slot :item="item" :index="index" />
+</template>
+```
+
+Usage with type safety:
+
+```vue
+<CustomCarousel :items="products">
+  <template #default="{ item, index }">
+    <!-- item is typed as Product -->
+    <ProductCard :product="item" :position="index" />
+  </template>
+</CustomCarousel>
+
+<CustomCarousel :items="banners">
+  <template #default="{ item }">
+    <!-- item is typed as Banner -->
+    <BannerSlide :banner="item" />
+  </template>
+</CustomCarousel>
+```
+
+TypeScript knows what `item` is based on what you pass to `:items`.
+
+## Navigation Variants
+
+```vue
+<template>
+  <div v-if="shouldShowNavigation" class="flex gap-2">
+    <button @click="scrollToDirection('left')" :class="navigationClasses">
+      <ChevronLeftIcon />
+    </button>
+    <button @click="scrollToDirection('right')" :class="navigationClasses">
+      <ChevronRightIcon />
+    </button>
+  </div>
+</template>
+
+<script setup>
+const navigationClasses = computed(() => {
+  if (props.navigationStyle === 'circular-white') {
+    return 'bg-white rounded-full p-2 shadow-lg hover:bg-gray-100'
+  }
+  return 'bg-primary text-white rounded p-2 hover:bg-primary-dark'
+})
+</script>
+```
+
+## Overflow Detection
+
+For the `finishes` variant, we only show navigation if content overflows:
+
+```typescript
+const isOverflowing = ref(false)
+
+const checkOverflow = () => {
+  if (!carouselRef.value) return
+  isOverflowing.value = carouselRef.value.scrollWidth > carouselRef.value.clientWidth
+}
+
+onMounted(() => {
+  checkOverflow()
+  window.addEventListener('resize', checkOverflow)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', checkOverflow)
+})
+
+const shouldShowNavigation = computed(() => {
+  if (props.variant === 'finishes') {
+    return isOverflowing.value && props.showNavigation
+  }
+  return props.showNavigation
+})
+```
+
+## Usage Examples
+
+### Product Carousel
+
+```vue
+<CustomCarousel :items="products" title="Featured Products" variant="default">
+  <template #default="{ item }">
+    <ProductCard :product="item" />
+  </template>
+</CustomCarousel>
+```
+
+### Hero Banner
+
+```vue
+<CustomCarousel
+  :items="banners"
+  variant="banner"
+  :autoplay="{ delay: 8000 }"
+  show-pagination
+  navigation-style="circular-white"
+>
+  <template #default="{ item }">
+    <img :src="item.image" :alt="item.title" class="w-full h-full object-cover" />
+    <div class="absolute bottom-8 left-8 text-white">
+      <h2 class="text-4xl font-bold">{{ item.title }}</h2>
+    </div>
+  </template>
+</CustomCarousel>
+```
+
+### Zone Selector
+
+```vue
+<CustomCarousel :items="zones" variant="zones" :show-navigation="false">
+  <template #default="{ item }">
+    <ZoneCard :zone="item" />
+  </template>
+</CustomCarousel>
+```
+
+### Finish Selector
+
+```vue
+<CustomCarousel :items="finishes" variant="finishes" item-height="80px">
+  <template #default="{ item }">
+    <FinishSwatch :finish="item" class="w-16 h-16" />
+  </template>
+</CustomCarousel>
+```
+
+## Why No External Library?
+
+We initially tried Swiper.js. Issues we hit:
+
+- Bundle size (50KB+)
+- SSR hydration mismatches
+- Complex configuration for simple needs
+- Style conflicts with our design system
+
+Native scroll + CSS snap gives us:
+
+- Zero bundle size overhead
+- Perfect SSR compatibility
+- Full control over styling
+- Better mobile performance
+
+## Complete Component Template
+
+```vue
+<template>
+  <div class="relative">
+    <!-- Title and Navigation -->
+    <div v-if="title || shouldShowNavigation" class="mb-4 flex items-center justify-between">
+      <h2 v-if="title" class="text-2xl font-bold">{{ title }}</h2>
+      <div v-if="shouldShowNavigation && navigationPosition === 'top'" class="flex gap-2">
+        <button @click="scrollToDirection('left')" :class="navigationClasses">
+          <ChevronLeftIcon class="h-5 w-5" />
+        </button>
+        <button @click="scrollToDirection('right')" :class="navigationClasses">
+          <ChevronRightIcon class="h-5 w-5" />
+        </button>
+      </div>
+    </div>
+
+    <!-- Carousel Container -->
+    <div
+      ref="carouselRef"
+      class="scrollbar-hide flex gap-4 overflow-x-auto scroll-smooth"
+      :class="{ 'snap-x snap-mandatory': isBannerMode }"
+      :style="{ height: itemHeight }"
+      @scroll="updateCurrentSlide"
+      @mouseenter="isHovered = true"
+      @mouseleave="isHovered = false"
+    >
+      <!-- Loading Skeleton -->
+      <template v-if="isLoading">
+        <div
+          v-for="n in 4"
+          :key="n"
+          :class="slideClasses"
+          class="flex-shrink-0 animate-pulse rounded-lg bg-gray-200"
+        />
+      </template>
+
+      <!-- Items -->
+      <template v-else>
+        <div
+          v-for="(item, index) in items"
+          :key="index"
+          :class="[slideClasses, { 'snap-center': isBannerMode }]"
+          class="flex-shrink-0"
+        >
+          <slot :item="item" :index="index" />
+        </div>
+      </template>
+    </div>
+
+    <!-- Pagination Dots -->
+    <div
+      v-if="showPagination && isBannerMode && items.length > 1"
+      class="mt-4 flex justify-center gap-2"
+    >
+      <button
+        v-for="(_, index) in items"
+        :key="index"
+        @click="scrollToSlide(index)"
+        class="h-3 w-3 rounded-full transition-colors"
+        :class="currentSlide === index ? 'bg-primary' : 'bg-gray-300'"
+      />
+    </div>
+  </div>
+</template>
+```
+
+## Key Takeaways
+
+1. **Vue 3 generics** let you create truly type-safe reusable components
+2. **Variant props** bundle related configuration for cleaner APIs
+3. **Native scroll + CSS snap** often beats external carousel libraries
+4. **Computed classes** keep variant logic clean and centralized
+5. **Scoped slots with generics** provide full type safety to consumers
+
+One component, 4 variants, zero code duplication, full type safety.
+
+---
+
+_Real component powering product carousels, hero banners, and category selectors across an e-commerce platform. 30+ iterations refined into this architecture._

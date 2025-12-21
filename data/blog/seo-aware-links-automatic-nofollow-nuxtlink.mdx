@@ -1,0 +1,385 @@
+---
+title: 'SEO-Aware Links: Automatic nofollow for Query Parameters in Nuxt'
+date: 2025-06-12T17:00:00Z
+lastmod: '2025-06-12'
+summary: 'A drop-in NuxtLink wrapper that automatically adds rel="nofollow" to links with query parameters, preventing PageRank leakage on filtered and parameterized URLs.'
+tags: ['SEO', 'Nuxt 3', 'Vue', 'Component', 'PageRank', 'Links']
+---
+
+## The SEO Problem with Query Parameters
+
+E-commerce sites have thousands of URLs. A product category page might be:
+
+```
+/products/kitchen-sinks                  ← Canonical
+/products/kitchen-sinks?color=white      ← Filtered
+/products/kitchen-sinks?material=steel   ← Filtered
+/products/kitchen-sinks?sort=price-asc   ← Sorted
+/products/kitchen-sinks?page=2           ← Paginated
+```
+
+Google crawls all of these. If internal links point to filtered versions, you're diluting PageRank across dozens of near-duplicate URLs instead of concentrating it on the canonical page.
+
+The SEO fix: add `rel="nofollow"` to links with query parameters (except pagination, which you want indexed).
+
+## The Manual Approach (Tedious)
+
+```vue
+<!-- Everywhere in your codebase -->
+<NuxtLink :to="{ path: '/products', query: { color: 'white' } }" rel="nofollow">
+  White Products
+</NuxtLink>
+
+<NuxtLink :to="{ path: '/products', query: { page: 2 } }">
+  Page 2 <!-- No nofollow for pagination -->
+</NuxtLink>
+```
+
+This requires remembering to add `rel="nofollow"` to every filtered link. Developers will forget. SEO will suffer.
+
+## The Automated Solution
+
+Create a wrapper component that automatically adds `nofollow` when query parameters are present:
+
+```vue
+<!-- components/CustomNuxtLink.vue -->
+<script setup lang="ts">
+import type { NuxtLinkProps } from '#app'
+
+const props = defineProps<NuxtLinkProps>()
+
+const computedRel = computed(() => {
+  if (!props.to) {
+    return props.rel
+  }
+
+  let hasQueryParams = false
+
+  // Handle object-style :to prop
+  if (typeof props.to === 'object' && props.to !== null) {
+    const query = props.to.query
+    if (query && typeof query === 'object') {
+      const queryKeys = Object.keys(query)
+      if (queryKeys.length > 0) {
+        // Exception: pagination-only links should NOT be nofollow
+        const onlyPage = queryKeys.length === 1 && queryKeys[0] === 'page'
+        hasQueryParams = !onlyPage
+      }
+    }
+  }
+  // Handle string-style :to prop
+  else if (typeof props.to === 'string') {
+    const hasQuery = props.to.includes('?')
+    if (hasQuery) {
+      const urlParams = new URLSearchParams(props.to.split('?')[1])
+      const paramKeys = Array.from(urlParams.keys())
+      const onlyPage = paramKeys.length === 1 && paramKeys[0] === 'page'
+      hasQueryParams = !onlyPage
+    }
+  }
+
+  if (!hasQueryParams) {
+    return props.rel
+  }
+
+  // Add nofollow, preserving any existing rel value
+  return props.rel ? `${props.rel} nofollow` : 'nofollow'
+})
+</script>
+
+<template>
+  <NuxtLink v-bind="{ ...props, rel: computedRel }">
+    <slot />
+  </NuxtLink>
+</template>
+```
+
+## How It Works
+
+### Regular Links: No Change
+
+```vue
+<CustomNuxtLink to="/products">Products</CustomNuxtLink>
+<!-- Renders: <a href="/products">Products</a> -->
+
+<CustomNuxtLink :to="{ name: 'products-category', params: { category: 'sinks' } }">
+  Sinks
+</CustomNuxtLink>
+<!-- Renders: <a href="/products/sinks">Sinks</a> -->
+```
+
+### Filtered Links: Automatic nofollow
+
+```vue
+<CustomNuxtLink :to="{ path: '/products', query: { color: 'white' } }">
+  White Products
+</CustomNuxtLink>
+<!-- Renders: <a href="/products?color=white" rel="nofollow">White Products</a> -->
+
+<CustomNuxtLink to="/products?material=steel">
+  Steel Products
+</CustomNuxtLink>
+<!-- Renders: <a href="/products?material=steel" rel="nofollow">Steel Products</a> -->
+```
+
+### Pagination: Exempt from nofollow
+
+```vue
+<CustomNuxtLink :to="{ path: '/products', query: { page: 2 } }">
+  Page 2
+</CustomNuxtLink>
+<!-- Renders: <a href="/products?page=2">Page 2</a> -->
+<!-- No nofollow! Pagination should be indexed -->
+```
+
+### Mixed Parameters: Gets nofollow
+
+```vue
+<CustomNuxtLink :to="{ path: '/products', query: { color: 'white', page: 2 } }">
+  White Products - Page 2
+</CustomNuxtLink>
+<!-- Renders: <a href="/products?color=white&page=2" rel="nofollow">...</a> -->
+<!-- Has nofollow because color param is present -->
+```
+
+## Migration Strategy
+
+### Step 1: Create the Component
+
+Save `CustomNuxtLink.vue` in your `components/` directory.
+
+### Step 2: Global Find & Replace
+
+Replace all `<NuxtLink` with `<CustomNuxtLink`:
+
+```bash
+# Find all occurrences
+grep -r "<NuxtLink" src/
+
+# Or use your IDE's find & replace
+# From: <NuxtLink
+# To: <CustomNuxtLink
+```
+
+### Step 3: Update Closing Tags
+
+```bash
+# From: </NuxtLink>
+# To: </CustomNuxtLink>
+```
+
+### Step 4: Verify
+
+Check that links render correctly:
+
+```bash
+# Build and inspect HTML
+npm run build
+grep -r 'rel="nofollow"' .output/
+```
+
+## Extending the Pattern
+
+### External Links: Always nofollow
+
+```vue
+<script setup lang="ts">
+const computedRel = computed(() => {
+  // ... existing query param logic ...
+
+  // External links always get nofollow
+  if (typeof props.to === 'string' && props.to.startsWith('http')) {
+    return props.rel ? `${props.rel} nofollow noopener` : 'nofollow noopener'
+  }
+
+  // ... rest of logic ...
+})
+</script>
+```
+
+### API/Asset Links: nofollow + noindex
+
+```vue
+<script setup lang="ts">
+const computedRel = computed(() => {
+  const to = props.to?.toString() ?? ''
+
+  // API and asset links
+  if (to.includes('/api/') || to.includes('/assets/')) {
+    return props.rel ? `${props.rel} nofollow noindex` : 'nofollow noindex'
+  }
+
+  // ... existing logic ...
+})
+</script>
+```
+
+### Specific Paths to Exclude
+
+```vue
+<script setup lang="ts">
+const nofollowPaths = ['/admin', '/dashboard', '/preview']
+
+const computedRel = computed(() => {
+  const to = props.to?.toString() ?? ''
+
+  // Always nofollow certain paths
+  if (nofollowPaths.some((path) => to.startsWith(path))) {
+    return 'nofollow'
+  }
+
+  // ... existing logic ...
+})
+</script>
+```
+
+## Edge Cases Handled
+
+### Preserving Existing rel Values
+
+```vue
+<CustomNuxtLink :to="{ path: '/docs', query: { tab: 'api' } }" rel="external">
+  API Docs
+</CustomNuxtLink>
+<!-- Renders: rel="external nofollow" -->
+```
+
+### Empty Query Objects
+
+```vue
+<CustomNuxtLink :to="{ path: '/products', query: {} }">
+  Products
+</CustomNuxtLink>
+<!-- Renders: no rel (empty query doesn't count) -->
+```
+
+### Null/Undefined to Prop
+
+```vue
+<CustomNuxtLink :to="null">
+  Disabled Link
+</CustomNuxtLink>
+<!-- Handles gracefully, returns original rel -->
+```
+
+## TypeScript Benefits
+
+Using `NuxtLinkProps` ensures full type safety:
+
+```typescript
+import type { NuxtLinkProps } from '#app'
+
+const props = defineProps<NuxtLinkProps>()
+```
+
+All NuxtLink props work automatically:
+
+- `to` (string | RouteLocationRaw)
+- `rel`
+- `target`
+- `prefetch`
+- `activeClass`
+- `exactActiveClass`
+- etc.
+
+## Performance Considerations
+
+The `computedRel` runs once per link on render. For pages with hundreds of links, this is still negligible—it's just string parsing.
+
+If you're paranoid:
+
+```vue
+<script setup lang="ts">
+// Memoize the result if to/rel don't change
+const computedRel = computed(() => {
+  // ... logic ...
+})
+
+// Or use a static utility for SSR
+const rel = computed(() => calculateRel(props.to, props.rel))
+</script>
+```
+
+## Verifying SEO Impact
+
+### Before: Check Current Links
+
+```bash
+# Crawl your site and count nofollow links
+curl -s https://yoursite.com | grep -c 'rel="nofollow"'
+```
+
+### After: Compare
+
+After migration, the count should increase significantly on filter-heavy pages.
+
+### Google Search Console
+
+Monitor "Discovered - currently not indexed" in Coverage report. Fewer filtered URLs should appear as Google respects nofollow.
+
+## The 89-File Refactor
+
+When we implemented this, we touched 89 files. The migration took about an hour:
+
+1. Create component (5 minutes)
+2. Find & replace (10 minutes)
+3. Build and test (30 minutes)
+4. Fix edge cases (15 minutes)
+
+The SEO benefit is permanent. Developers no longer need to remember nofollow—it's automated.
+
+## Complete Component
+
+```vue
+<!-- components/CustomNuxtLink.vue -->
+<script setup lang="ts">
+import type { NuxtLinkProps } from '#app'
+
+const props = defineProps<NuxtLinkProps>()
+
+const computedRel = computed(() => {
+  if (!props.to) {
+    return props.rel
+  }
+
+  let hasQueryParams = false
+
+  if (typeof props.to === 'object' && props.to !== null) {
+    const query = props.to.query
+    if (query && typeof query === 'object') {
+      const queryKeys = Object.keys(query)
+      if (queryKeys.length > 0) {
+        const onlyPage = queryKeys.length === 1 && queryKeys[0] === 'page'
+        hasQueryParams = !onlyPage
+      }
+    }
+  } else if (typeof props.to === 'string') {
+    const hasQuery = props.to.includes('?')
+    if (hasQuery) {
+      const urlParams = new URLSearchParams(props.to.split('?')[1])
+      const paramKeys = Array.from(urlParams.keys())
+      const onlyPage = paramKeys.length === 1 && paramKeys[0] === 'page'
+      hasQueryParams = !onlyPage
+    }
+  }
+
+  if (!hasQueryParams) {
+    return props.rel
+  }
+
+  return props.rel ? `${props.rel} nofollow` : 'nofollow'
+})
+</script>
+
+<template>
+  <NuxtLink v-bind="{ ...props, rel: computedRel }">
+    <slot />
+  </NuxtLink>
+</template>
+```
+
+Drop it in, replace your links, and never worry about nofollow on filtered URLs again.
+
+---
+
+_Real component from an e-commerce site with thousands of product filter combinations. 89 files refactored, SEO improved automatically._

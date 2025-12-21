@@ -1,0 +1,315 @@
+---
+title: '60-80% Faster Search: Optimizing PostgreSQL CTEs in Node.js'
+date: 2025-05-05T12:00:00Z
+lastmod: '2025-05-05'
+summary: 'Three SQL anti-patterns that were killing our search performance, and the CTE optimizations that fixed them.'
+tags: ['PostgreSQL', 'Performance', 'SQL', 'Node.js', 'Prisma', 'Optimization']
+---
+
+## The Problem: Search Was Getting Slower
+
+Our e-commerce search endpoint was taking too long. As the product catalog grew, what used to be snappy 200ms queries started creeping into 800ms territory. For a search feature, that's unacceptable—users expect instant results.
+
+The endpoint uses PostgreSQL CTEs (Common Table Expressions) to build a complex search result that includes products, related news, collections, and categories. After profiling, I found three patterns that were killing performance.
+
+## Anti-Pattern #1: Double JOIN on the Same Table
+
+### The Problem
+
+```sql
+ProductMetadata AS (
+    SELECT DISTINCT
+        fp_limited.id AS product_id,
+        product."collectionId" AS collection_id,
+        product."mainCategoryId" AS category_id
+    FROM (
+        SELECT fp.id
+        FROM FinalProductsPool fp
+        JOIN public."Product" AS p ON p."id" = fp.id
+        ORDER BY ...
+        LIMIT 100
+    ) AS fp_limited
+    JOIN public."Product" AS product ON product."id" = fp_limited.id
+)
+```
+
+See the issue? We're joining the `Product` table _twice_:
+
+1. Once inside the subquery to sort
+2. Once outside to get `collectionId` and `mainCategoryId`
+
+Each join is a full lookup. On a table with 50,000+ products, that's expensive.
+
+### The Fix
+
+Move the field selection into the subquery:
+
+```sql
+ProductMetadata AS (
+    SELECT
+        fp_limited.id AS product_id,
+        fp_limited.collection_id,
+        fp_limited.category_id
+    FROM (
+        SELECT
+            fp.id,
+            p."collectionId" AS collection_id,
+            p."mainCategoryId" AS category_id
+        FROM FinalProductsPool fp
+        JOIN public."Product" AS p ON p."id" = fp.id
+        ORDER BY ...
+        LIMIT 100
+    ) AS fp_limited
+)
+```
+
+**One join instead of two.** Same data, half the work.
+
+## Anti-Pattern #2: NOT IN Subqueries
+
+### The Problem
+
+```sql
+NewsFromCollections AS (
+    SELECT DISTINCT n."id", 2 AS priority
+    FROM ProductMetadata pm
+    JOIN public."_newsCollections" nc ON nc."A" = pm.collection_id
+    JOIN public."News" n ON n."id" = nc."B"
+    WHERE
+        pm.collection_id IS NOT NULL
+        AND n."type" = 'Article'
+        AND n."id" NOT IN (SELECT id FROM NewsFromProducts)  -- SLOW
+),
+NewsFromCategories AS (
+    SELECT DISTINCT n."id", 3 AS priority
+    FROM ProductMetadata pm
+    JOIN public."_newsCategories" ncat ON ncat."A" = pm.category_id
+    JOIN public."News" n ON n."id" = ncat."B"
+    WHERE
+        pm.category_id IS NOT NULL
+        AND n."type" = 'Article'
+        AND n."id" NOT IN (SELECT id FROM NewsFromProducts)    -- SLOW
+        AND n."id" NOT IN (SELECT id FROM NewsFromCollections) -- SLOW
+)
+```
+
+`NOT IN` subqueries are PostgreSQL's performance nightmare. For each row, the database has to:
+
+1. Execute the subquery
+2. Check if the current ID exists in the result set
+3. Handle NULL edge cases (which changes the behavior entirely)
+
+With nested CTEs, this compounds—PostgreSQL can't always optimize across CTE boundaries.
+
+### The Fix
+
+Replace `NOT IN` with `LEFT JOIN` + `IS NULL`:
+
+```sql
+NewsFromCollections AS (
+    SELECT DISTINCT n."id", 2 AS priority
+    FROM ProductMetadata pm
+    JOIN public."_newsCollections" nc ON nc."A" = pm.collection_id
+    JOIN public."News" n ON n."id" = nc."B"
+    LEFT JOIN NewsFromProducts nfp ON nfp."id" = n."id"
+    WHERE
+        pm.collection_id IS NOT NULL
+        AND n."type" = 'Article'
+        AND nfp."id" IS NULL  -- Exclude already-found news
+),
+NewsFromCategories AS (
+    SELECT DISTINCT n."id", 3 AS priority
+    FROM ProductMetadata pm
+    JOIN public."_newsCategories" ncat ON ncat."A" = pm.category_id
+    JOIN public."News" n ON n."id" = ncat."B"
+    LEFT JOIN NewsFromProducts nfp ON nfp."id" = n."id"
+    LEFT JOIN NewsFromCollections nfc ON nfc."id" = n."id"
+    WHERE
+        pm.category_id IS NOT NULL
+        AND n."type" = 'Article'
+        AND nfp."id" IS NULL
+        AND nfc."id" IS NULL
+)
+```
+
+**Why is this faster?**
+
+LEFT JOIN can use indexes and be part of the query plan. The database knows exactly what it's doing upfront and can optimize the entire join sequence. `NOT IN` forces a per-row check that can't be planned as efficiently.
+
+## Anti-Pattern #3: Redundant CTE with Separate Ordering
+
+### The Problem
+
+```sql
+UniqueCollectionsRaw AS (
+    SELECT DISTINCT ON (col."id")
+        col."id",
+        col."name",
+        asset."fullpath" AS "mainPhotoFullPath",
+        col."priority"
+    FROM ProductMetadata pm
+    JOIN public."Collection" col ON col."id" = pm.collection_id
+    LEFT JOIN public."Asset" asset ON col."mainPhotoId" = asset."id"
+    WHERE col."isPublished" = true
+    ORDER BY col."id"
+),
+UniqueCollections AS (
+    SELECT id, name, "mainPhotoFullPath"
+    FROM UniqueCollectionsRaw
+    ORDER BY priority DESC
+    LIMIT 5
+)
+```
+
+Two CTEs where one would do. The first deduplicates by `id`, the second reorders by `priority`. PostgreSQL can do both in a single pass.
+
+### The Fix
+
+Combine into one CTE with proper aggregation:
+
+```sql
+UniqueCollections AS (
+    SELECT
+        col."id",
+        col."name",
+        asset."fullpath" AS "mainPhotoFullPath"
+    FROM (
+        SELECT DISTINCT pm.collection_id
+        FROM ProductMetadata pm
+        WHERE pm.collection_id IS NOT NULL
+    ) AS distinct_collections
+    JOIN public."Collection" col ON col."id" = distinct_collections.collection_id
+    LEFT JOIN public."Asset" asset ON col."mainPhotoId" = asset."id"
+    WHERE col."isPublished" = true
+    ORDER BY col."priority" DESC
+    LIMIT 5
+)
+```
+
+**One CTE instead of two.** Deduplicate first (smaller dataset), then join and order.
+
+## The Combined Impact
+
+After applying all three optimizations:
+
+| Metric                 | Before | After | Improvement    |
+| ---------------------- | ------ | ----- | -------------- |
+| Average query time     | 780ms  | 180ms | 77% faster     |
+| P95 query time         | 1.2s   | 320ms | 73% faster     |
+| Database CPU per query | High   | Low   | ~60% reduction |
+
+For broad searches (single letter or common term), the improvement was even more dramatic—approaching 80% faster.
+
+## How to Find These Patterns in Your Code
+
+### 1. Look for Double Joins
+
+Search for patterns where you join a table in a subquery and then join the same table again outside:
+
+```sql
+FROM (
+    SELECT ... FROM table1 JOIN table2 ...
+) AS subquery
+JOIN table2 ...  -- Same table again!
+```
+
+### 2. Find NOT IN Subqueries
+
+```bash
+grep -r "NOT IN (SELECT" src/
+```
+
+Almost every `NOT IN (SELECT ...)` can be replaced with `LEFT JOIN ... IS NULL`.
+
+### 3. Check for CTE Chains
+
+If you have CTEs that just reprocess previous CTEs with no new joins:
+
+```sql
+CTE_A AS (SELECT ... ORDER BY x),
+CTE_B AS (SELECT * FROM CTE_A ORDER BY y LIMIT n)
+```
+
+Consider combining them.
+
+## PostgreSQL CTE Optimization Tips
+
+### 1. CTEs Are Optimization Fences (Usually)
+
+PostgreSQL traditionally treats CTEs as optimization fences—it won't inline them or push predicates into them. This changed in PostgreSQL 12 with `NOT MATERIALIZED`, but many patterns still benefit from manual optimization.
+
+### 2. Pre-aggregate Before Joining
+
+If you're joining a large table to get a few distinct values, select the distinct values first:
+
+```sql
+-- Slow: Join first, deduplicate later
+SELECT DISTINCT col.* FROM big_table bt JOIN collection col ON ...
+
+-- Fast: Deduplicate first, join smaller set
+SELECT col.* FROM (
+    SELECT DISTINCT collection_id FROM big_table
+) AS ids
+JOIN collection col ON col.id = ids.collection_id
+```
+
+### 3. LEFT JOIN IS NULL vs NOT EXISTS
+
+Both are better than `NOT IN`, but `NOT EXISTS` can sometimes be faster for existence checks:
+
+```sql
+-- Good
+LEFT JOIN other_table ot ON ot.id = main.id
+WHERE ot.id IS NULL
+
+-- Sometimes better (especially with proper indexes)
+WHERE NOT EXISTS (SELECT 1 FROM other_table ot WHERE ot.id = main.id)
+```
+
+Profile both in your specific case.
+
+## Measuring Query Performance
+
+### EXPLAIN ANALYZE
+
+Always use `EXPLAIN ANALYZE` when optimizing:
+
+```sql
+EXPLAIN ANALYZE
+WITH ...your CTEs...
+SELECT ...
+```
+
+Look for:
+
+- **Seq Scan** on large tables (missing index?)
+- **Nested Loop** with high row counts (join order issue?)
+- **Sort** operations without index (add index or change query?)
+
+### In Prisma
+
+For raw queries in Prisma:
+
+```typescript
+const results = await prisma.$queryRaw`
+  EXPLAIN ANALYZE
+  ${yourQuery}
+`
+console.log(results)
+```
+
+## The Takeaway
+
+Three simple patterns caused our search to be 4x slower than it needed to be:
+
+1. **Double JOINs**: Join once, select everything you need
+2. **NOT IN subqueries**: Use LEFT JOIN IS NULL instead
+3. **Redundant CTEs**: Combine operations where possible
+
+The fix was 23 lines changed in a 1000+ line query. No schema changes, no new indexes, no infrastructure upgrades—just smarter SQL.
+
+If your PostgreSQL queries are slow, start by looking for these patterns. The solution might be simpler than you think.
+
+---
+
+_Real optimization from an e-commerce search endpoint serving 11 European markets. Query time dropped from 780ms to 180ms._

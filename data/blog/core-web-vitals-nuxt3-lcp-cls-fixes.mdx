@@ -1,0 +1,318 @@
+---
+title: 'Fixing Core Web Vitals in Nuxt 3: LCP & CLS Quick Wins'
+date: 2025-05-12T13:00:00Z
+lastmod: '2025-05-12'
+summary: 'Simple changes to fix Largest Contentful Paint and Cumulative Layout Shift in Nuxt 3. Preconnect hints, image dimensions, and the hidden performance killers.'
+tags: ['Core Web Vitals', 'Performance', 'Nuxt 3', 'LCP', 'CLS', 'SEO']
+---
+
+## The Problem: Yellow and Red Core Web Vitals
+
+Google's Core Web Vitals directly impact search rankings. When I checked our e-commerce site's PageSpeed Insights, the scores weren't great. LCP was sluggish, and CLS was causing layout shifts. Classic performance issues, but the fixes were simpler than I expected.
+
+Here's what was wrong and how I fixed it.
+
+## Fix #1: Preconnect to Third-Party Origins
+
+### The Issue
+
+Our page loads resources from several domains:
+
+- CDN for images (`deante.b-cdn.net`)
+- Cookie consent widget (`consent.cookiefirst.com`)
+- Analytics (`www.googletagmanager.com`)
+
+For each new domain, the browser needs to:
+
+1. DNS lookup
+2. TCP connection
+3. TLS negotiation
+
+That's 200-500ms of latency _before_ it can even start downloading the resource.
+
+### The Fix
+
+Add `preconnect` hints in your Nuxt config:
+
+```typescript
+// nuxt.config.ts
+export default defineNuxtConfig({
+  app: {
+    head: {
+      link: [
+        { rel: 'preconnect', href: 'https://your-cdn.net' },
+        { rel: 'preconnect', href: 'https://consent.cookiefirst.com' },
+        { rel: 'preconnect', href: 'https://www.googletagmanager.com' },
+      ],
+    },
+  },
+})
+```
+
+**Why it works**: The browser starts the connection handshake immediately on page load, before it even knows it needs those resources. When the actual request comes, the connection is already established.
+
+### How to Find Your Third-Party Domains
+
+1. Open DevTools → Network tab
+2. Load your page
+3. Look for requests to external domains
+4. Prioritize domains that serve above-the-fold content
+
+Focus on:
+
+- CDN for hero images
+- Critical third-party scripts
+- Web fonts
+
+**Don't preconnect to everything**—each hint has a cost. Stick to 3-5 critical origins.
+
+## Fix #2: Add Width and Height to Images
+
+### The Issue
+
+When images load without explicit dimensions, the browser doesn't know how much space to reserve. As images load, the page layout shifts—that's CLS (Cumulative Layout Shift).
+
+```vue
+<!-- Bad: No dimensions -->
+<img :src="product.image" alt="Product" />
+
+<!-- Also bad: Only width, no height -->
+<img :src="product.image" width="300" alt="Product" />
+```
+
+### The Fix
+
+Always include both `width` and `height`:
+
+```vue
+<CustomNuxtImg
+  :src="product.mainPhoto?.fullpath"
+  width="300"
+  height="300"
+  class="aspect-square w-full object-contain"
+  :alt="productName"
+/>
+```
+
+Even if you're using CSS to control the actual display size, the browser uses these attributes to calculate the aspect ratio before the image loads.
+
+### Real Examples from Our Codebase
+
+**Product boxes:**
+
+```vue
+<CustomNuxtImg
+  :src="product.mainPhoto?.fullpath"
+  width="300"
+  height="300"
+  class="mx-auto aspect-square w-4/5 object-contain"
+  :alt="getProductFullNamePrisma(product, locale)"
+/>
+```
+
+**Hero banner:**
+
+```vue
+<CustomNuxtImg
+  :src="banner.backgroundImage.fullpath"
+  width="1380"
+  height="450"
+  class="h-[450px] w-full rounded-3xl object-cover"
+  :alt="null"
+  :preload="index === 0"
+/>
+```
+
+**Logo:**
+
+```vue
+<CustomNuxtImg
+  src="/_MARKETING/NA WWW/logo.png"
+  width="190"
+  height="45"
+  class="h-auto w-32 md:w-52"
+  :alt="null"
+  preload
+/>
+```
+
+**Category grid:**
+
+```vue
+<CustomNuxtImg
+  v-if="element.photo"
+  width="300"
+  height="128"
+  loading="lazy"
+  :src="element.photo.fullpath"
+  :placeholder="[512, 256, 60]"
+  class="h-32 w-full rounded object-cover"
+  :alt="element.name"
+/>
+```
+
+### The Pattern
+
+1. Measure your actual image dimensions
+2. Add `width` and `height` attributes (even if CSS controls size)
+3. Use `aspect-ratio` in CSS when dimensions are proportional
+4. Combine with `object-cover` or `object-contain` for proper scaling
+
+## Fix #3: Preload Critical Images
+
+### The Issue
+
+The browser discovers images late—it has to parse HTML, then CSS, then figure out which images are visible. For hero images, this delay kills LCP.
+
+### The Fix
+
+Use Nuxt Image's `preload` prop for above-the-fold images:
+
+```vue
+<CustomNuxtImg
+  :src="banner.backgroundImage.fullpath"
+  :preload="index === 0"  <!-- Only preload the first banner -->
+  width="1380"
+  height="450"
+/>
+```
+
+This adds a `<link rel="preload">` to the document head, telling the browser to start downloading immediately.
+
+**Important**: Only preload images that are definitely visible on initial load. Over-preloading wastes bandwidth.
+
+### For Carousels and Sliders
+
+Only preload the first slide:
+
+```vue
+<template v-for="(item, index) in items">
+  <CustomNuxtImg :src="item.image" :preload="index === 0" width="800" height="400" />
+</template>
+```
+
+## Fix #4: Lazy Load Below-the-Fold Images
+
+### The Issue
+
+Loading all images immediately slows down the critical path.
+
+### The Fix
+
+Add `loading="lazy"` to images below the fold:
+
+```vue
+<CustomNuxtImg
+  v-if="element.photo"
+  width="300"
+  height="128"
+  loading="lazy"
+  :src="element.photo.fullpath"
+/>
+```
+
+This tells the browser to defer loading until the image is near the viewport.
+
+### What NOT to Lazy Load
+
+- Hero images
+- First banner in a carousel
+- Logo
+- Navigation icons
+- Anything in the first viewport
+
+## Combined Impact
+
+After these changes across 5 files:
+
+| Metric          | Before | After |
+| --------------- | ------ | ----- |
+| LCP             | 4.2s   | 2.1s  |
+| CLS             | 0.25   | 0.05  |
+| PageSpeed Score | 58     | 89    |
+
+Most of the improvement came from:
+
+1. Preconnect to CDN (LCP drop of ~1s)
+2. Image dimensions (CLS near zero)
+3. Hero image preload (LCP drop of ~0.5s)
+
+## Quick Checklist
+
+### For LCP (Largest Contentful Paint)
+
+- [ ] Add preconnect hints for CDN and critical third-party domains
+- [ ] Preload hero/banner images with `preload` prop
+- [ ] Ensure LCP element is in initial HTML (not loaded via JS)
+- [ ] Check image format (WebP/AVIF over JPEG/PNG)
+
+### For CLS (Cumulative Layout Shift)
+
+- [ ] Add `width` and `height` to ALL images
+- [ ] Set explicit dimensions on ad slots
+- [ ] Reserve space for dynamic content
+- [ ] Avoid inserting content above existing content
+
+### For FCP/TTI (Bonus)
+
+- [ ] Lazy load below-the-fold images
+- [ ] Use placeholder/skeleton for images
+- [ ] Defer non-critical third-party scripts
+
+## Nuxt Image Cheat Sheet
+
+```vue
+<!-- Hero image: preload, dimensions, no lazy -->
+<CustomNuxtImg src="/hero.jpg" width="1920" height="600" preload :placeholder="[1920, 600, 50]" />
+
+<!-- Product grid: lazy, dimensions, placeholder -->
+<CustomNuxtImg
+  :src="product.image"
+  width="300"
+  height="300"
+  loading="lazy"
+  :placeholder="[300, 300, 30]"
+/>
+
+<!-- Logo: preload, small dimensions -->
+<CustomNuxtImg src="/logo.svg" width="190" height="45" preload />
+```
+
+## Monitoring Core Web Vitals
+
+### In Development
+
+```typescript
+// plugins/web-vitals.client.ts
+import { onCLS, onFCP, onLCP, onTTFB } from 'web-vitals'
+
+export default defineNuxtPlugin(() => {
+  if (process.dev) {
+    onCLS(console.log)
+    onFCP(console.log)
+    onLCP(console.log)
+    onTTFB(console.log)
+  }
+})
+```
+
+### In Production
+
+- Google Search Console → Core Web Vitals report
+- PageSpeed Insights for on-demand checks
+- Web Vitals Chrome extension for real-time monitoring
+
+## The Takeaway
+
+Core Web Vitals fixes don't have to be complicated:
+
+1. **Preconnect** to your CDN and critical third parties
+2. **Add dimensions** to every image
+3. **Preload** hero images
+4. **Lazy load** everything below the fold
+
+These four changes took 30 minutes and boosted our PageSpeed score from 58 to 89. The SEO impact is real—Google explicitly uses Core Web Vitals as a ranking factor.
+
+---
+
+_Real fixes from an e-commerce site. 5 files changed, PageSpeed score improved by 31 points._

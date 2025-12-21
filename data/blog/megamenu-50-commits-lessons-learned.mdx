@@ -1,0 +1,333 @@
+---
+title: 'The MegaMenu That Took 50 Commits: Lessons in Component Complexity'
+date: 2025-06-22T18:00:00Z
+lastmod: '2025-06-22'
+summary: 'What 50 commits on a single Vue component over 3 months taught me about iterative development, when to refactor, and managing complexity.'
+tags: ['Vue', 'Components', 'Refactoring', 'Software Engineering', 'Iteration']
+---
+
+## The Numbers Don't Lie
+
+I ran `git log` on our MegaMenu component:
+
+```bash
+git log --oneline --since="3 months ago" -- src/components/MegaMenu.vue | wc -l
+# 50
+```
+
+Fifty commits. On one component. In three months.
+
+That's roughly one commit every two days, touching the same file. Some days had multiple commits. Some had revert-then-reapply cycles. It was messy.
+
+But here's the thing: **the component works great now**. Users love the navigation. The code is maintainable. Those 50 commits weren't wasted—they were the process.
+
+## The Revert Patterns
+
+Looking at the git history, I found several "Revert X" → "Reapply X" cycles:
+
+```
+7816b65 Update MegaMenu.vue
+21165e7 Revert "Update MegaMenu.vue"
+082dc64 Update MegaMenu.vue
+d57502c Revert "Update MegaMenu.vue"
+3a4288c Reapply "Update MegaMenu.vue"
+...
+```
+
+This isn't a sign of poor planning. It's real-world development:
+
+1. **Push a change** → Works in staging
+2. **Deploy to production** → Edge case breaks
+3. **Revert quickly** → Production stable
+4. **Fix the edge case** → Reapply with fix
+
+The alternative—catching every edge case before shipping—would have meant a 6-month design phase instead of iterating with real user feedback.
+
+## What Made This Component Complex
+
+MegaMenus are deceptively hard:
+
+### 1. Dynamic Height Calculation
+
+```vue
+<script setup>
+const baseModalHeight = computed(() => {
+  // Calculate based on content
+  return contentItems.value.length * ITEM_HEIGHT + PADDING
+})
+
+const modalHeight = ref(`${baseModalHeight.value}px`)
+
+onMounted(() => {
+  const updateHeight = () => {
+    const calculated = baseModalHeight.value
+    const viewport = window.innerHeight
+    const max = Math.min(calculated, viewport * 0.8)
+    modalHeight.value = `${max}px`
+  }
+
+  updateHeight()
+  window.addEventListener('resize', updateHeight)
+})
+</script>
+```
+
+The height needs to:
+
+- Fit the content
+- Not exceed viewport
+- Update on resize
+- Not cause layout shifts
+
+Each requirement adds complexity. Each edge case (mobile, tablet, weird viewport ratios) needed testing.
+
+### 2. Hover State Management
+
+When do you show the dropdown? When do you hide it?
+
+```vue
+<script setup>
+let hoverTimeout = null
+
+const handleMouseEnter = () => {
+  clearTimeout(hoverTimeout)
+  isOpen.value = true
+}
+
+const handleMouseLeave = () => {
+  // Delay closing so users can move to submenu
+  hoverTimeout = setTimeout(() => {
+    isOpen.value = false
+  }, 150)
+}
+</script>
+```
+
+Too short delay → Closes before user reaches submenu
+Too long delay → Feels unresponsive
+No delay → Chaos on mouseover
+
+We changed this at least 5 times.
+
+### 3. Touch Device Behavior
+
+Mobile users tap, not hover. The same component needs different interaction:
+
+```vue
+<script setup>
+const isTouchDevice = ref(false)
+
+onMounted(() => {
+  isTouchDevice.value = 'ontouchstart' in window
+})
+
+const handleClick = (category) => {
+  if (isTouchDevice.value) {
+    if (activeCategory.value === category.id) {
+      // Already open, navigate
+      navigateTo(category.path)
+    } else {
+      // First tap opens, second navigates
+      activeCategory.value = category.id
+    }
+  } else {
+    // Desktop: always navigate
+    navigateTo(category.path)
+  }
+}
+</script>
+```
+
+### 4. Animation + Content Loading
+
+The menu needs to:
+
+- Animate open (smooth)
+- Load content (async)
+- Not flicker (no layout shifts during load)
+
+```vue
+<script setup>
+const menuState = ref('closed') // 'closed' | 'opening' | 'open' | 'closing'
+
+const open = async () => {
+  menuState.value = 'opening'
+  await loadContent()
+  await nextTick()
+  menuState.value = 'open'
+}
+</script>
+```
+
+## The Lifecycle Bug
+
+Commit `63a72ef` fixed a subtle bug:
+
+### Before (Wrong)
+
+```typescript
+onMounted(() => {
+  const updateHeight = () => {
+    /* ... */
+  }
+  window.addEventListener('resize', updateHeight)
+
+  onUnmounted(() => {
+    window.removeEventListener('resize', updateHeight)
+  })
+})
+```
+
+### After (Correct)
+
+```typescript
+let updateHeight: (() => void) | null = null
+
+onMounted(() => {
+  updateHeight = () => {
+    /* ... */
+  }
+  window.addEventListener('resize', updateHeight)
+})
+
+onUnmounted(() => {
+  if (updateHeight) {
+    window.removeEventListener('resize', updateHeight)
+  }
+})
+```
+
+Nesting `onUnmounted` inside `onMounted` captures the wrong lifecycle context. The cleanup function might not run, or might run at the wrong time.
+
+This bug caused memory leaks and "ghost" event handlers. It took 3 commits to find and fix.
+
+## When NOT to Refactor
+
+By commit 30, the component was getting unwieldy. The temptation to "refactor everything" was strong.
+
+I resisted. Here's why:
+
+### The Component Was Shipping Value
+
+Every commit was fixing real user issues or adding requested features. Stopping to refactor meant:
+
+- Delaying fixes
+- Breaking working behavior
+- Regression risk
+
+### Refactoring Without Tests Is Dangerous
+
+We didn't have comprehensive tests for every interaction state. A refactor would introduce bugs we wouldn't catch.
+
+### "Messy" Doesn't Mean "Broken"
+
+The code worked. Users weren't complaining about navigation. The messiness was internal—visible to developers, invisible to users.
+
+## When TO Refactor
+
+Around commit 45, patterns became clear:
+
+1. **Repeated logic**: Height calculation was copied in 3 places
+2. **State machine emerging**: `isOpen`, `isAnimating`, `isLoading` should be one state
+3. **Clear boundaries**: Touch handling should be its own composable
+
+That's when we extracted:
+
+```typescript
+// composables/useMegaMenuState.ts
+export function useMegaMenuState() {
+  const state = ref<'closed' | 'opening' | 'open' | 'closing'>('closed')
+
+  const open = async () => {
+    /* ... */
+  }
+  const close = async () => {
+    /* ... */
+  }
+
+  return { state, open, close }
+}
+
+// composables/useTouchInteraction.ts
+export function useTouchInteraction() {
+  const isTouchDevice = ref(false)
+  // ...
+  return { isTouchDevice, handleTap }
+}
+```
+
+The refactor happened AFTER the patterns were proven, not before.
+
+## The Commit Message Problem
+
+Looking back, many commits are just "Update MegaMenu.vue". That's not helpful.
+
+Better approach I'm using now:
+
+```bash
+git commit -m "MegaMenu: Fix hover timeout on submenu transition"
+git commit -m "MegaMenu: Handle touch device first-tap-opens pattern"
+git commit -m "MegaMenu: Extract height calculation to computed"
+```
+
+Future-me can understand what changed without reading diffs.
+
+## Metrics That Mattered
+
+Despite the messy history, the component improved:
+
+| Metric                           | Start    | End     |
+| -------------------------------- | -------- | ------- |
+| User-reported navigation issues  | 12/month | 0/month |
+| Mobile bounce rate on nav pages  | 34%      | 18%     |
+| Time to interactive (navigation) | 450ms    | 180ms   |
+| Component bundle size            | 42KB     | 28KB    |
+
+The 50 commits weren't chaos—they were progress.
+
+## Lessons Learned
+
+### 1. Iteration Is Not Failure
+
+50 commits means 50 improvements. Each one made the component better. The "perfect first try" is a myth.
+
+### 2. Revert Early, Revert Often
+
+When production breaks, revert first, debug second. Users don't care about your fix—they care about working software.
+
+### 3. Refactor When Patterns Are Clear
+
+Don't refactor speculatively. Wait until you've implemented the feature 3 times and see what should be abstracted.
+
+### 4. Complex Interactions Need Iteration
+
+Hover states, touch handling, animations, loading states—each has edge cases you won't predict. Ship, observe, fix.
+
+### 5. Track Component Churn
+
+```bash
+# Which components change most?
+git log --oneline --since="3 months ago" -- "*.vue" | \
+    sed 's/.*\(src\/.*\.vue\)/\1/' | \
+    sort | uniq -c | sort -rn | head -10
+```
+
+High churn components deserve extra attention—either simplify them or invest in tests.
+
+## The Component Today
+
+After 50 commits, MegaMenu.vue is:
+
+- 380 lines (down from 520 at peak)
+- Zero reported issues in last month
+- Extracted to 2 composables
+- Fully typed
+- Documented with inline comments
+
+Would I do it differently? Maybe. But the iterative approach got us here with continuous value delivery. Users never waited months for "the perfect navigation." They got improvements every week.
+
+That's the real lesson: **50 messy commits that ship value beat 1 perfect commit that never does.**
+
+---
+
+_Real commit history from a production e-commerce site. The MegaMenu now serves millions of navigation interactions monthly._

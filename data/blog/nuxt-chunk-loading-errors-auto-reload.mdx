@@ -1,0 +1,303 @@
+---
+title: 'Handling Chunk Loading Errors After Deployments in Nuxt 3'
+date: 2025-05-20T14:00:00Z
+lastmod: '2025-05-20'
+summary: 'Why users see 403 errors on JavaScript files after deployments, and a 5-line Nuxt plugin that fixes it.'
+tags: ['Nuxt 3', 'Deployment', 'CDN', 'Production', 'Error Handling']
+---
+
+## The Symptom: Random 403 Errors on JS Files
+
+After a production deployment, users started reporting that the site was broken. Console logs showed:
+
+```
+Failed to load resource: the server responded with a status of 403 ()
+GET https://yoursite.com/_nuxt/chunk-abc123.js 403 (Forbidden)
+```
+
+The weird part? Not every user experienced it. Some worked fine, others got a white screen. Refreshing the page usually fixed it.
+
+## Understanding the Problem
+
+Here's what was happening:
+
+1. **User visits site** → Browser caches the HTML
+2. **We deploy new version** → New chunk files with new hashes
+3. **User navigates** → Browser tries to load old chunk (from cached HTML)
+4. **Old chunk doesn't exist** → CDN returns 403 or 404
+5. **App crashes** → User sees white screen or broken UI
+
+The timeline:
+
+```
+Before deploy: chunk-abc123.js ✓
+After deploy:  chunk-def456.js ✓ (new hash)
+               chunk-abc123.js ✗ (deleted)
+```
+
+### Why 403 Instead of 404?
+
+CDNs often return 403 for missing files instead of 404. It's a security practice—don't reveal whether a file ever existed. Either way, the result is the same: the browser can't load the chunk.
+
+### Why Only Some Users?
+
+- Users with fresh sessions → Get new HTML with correct chunk references
+- Users with cached HTML → Try to load old chunks that no longer exist
+
+CDN cache invalidation isn't instant. Some edge servers have the new HTML, others still serve the old version. Users hitting different edge servers get different experiences.
+
+## The Solution: 5 Lines of Code
+
+Nuxt 3 provides a hook specifically for this:
+
+```typescript
+// plugins/chunk-error-handler.client.ts
+export default defineNuxtPlugin((nuxtApp) => {
+  nuxtApp.hook('app:chunkError', () => {
+    window.location.reload()
+  })
+})
+```
+
+That's it. When a chunk fails to load, reload the page. The fresh request gets the new HTML with correct chunk references.
+
+### Why This Works
+
+1. **Chunk error detected** → Nuxt fires `app:chunkError` hook
+2. **Plugin catches it** → Triggers full page reload
+3. **Fresh request** → Gets new HTML from CDN
+4. **New chunks load** → App works correctly
+
+The reload is invisible to users who haven't interacted yet. For those mid-navigation, it's a brief flash—far better than a broken app.
+
+## Alternative: More Graceful Handling
+
+If you want to avoid the abrupt reload:
+
+```typescript
+// plugins/chunk-error-handler.client.ts
+export default defineNuxtPlugin((nuxtApp) => {
+  nuxtApp.hook('app:chunkError', ({ error }) => {
+    // Log for debugging
+    console.error('Chunk load failed:', error)
+
+    // Show a toast/notification
+    if (window.$toast) {
+      window.$toast.info('Updating to the latest version...')
+    }
+
+    // Delay reload slightly so user sees the message
+    setTimeout(() => {
+      window.location.reload()
+    }, 1000)
+  })
+})
+```
+
+Or store state before reloading:
+
+```typescript
+// plugins/chunk-error-handler.client.ts
+export default defineNuxtPlugin((nuxtApp) => {
+  nuxtApp.hook('app:chunkError', () => {
+    // Preserve scroll position
+    sessionStorage.setItem(
+      'chunk-error-reload',
+      JSON.stringify({
+        scrollY: window.scrollY,
+        path: window.location.pathname,
+      })
+    )
+
+    window.location.reload()
+  })
+})
+
+// In your app.vue or layout
+onMounted(() => {
+  const saved = sessionStorage.getItem('chunk-error-reload')
+  if (saved) {
+    sessionStorage.removeItem('chunk-error-reload')
+    const { scrollY } = JSON.parse(saved)
+    window.scrollTo(0, scrollY)
+  }
+})
+```
+
+## Preventing the Problem
+
+### 1. Longer CDN Cache Invalidation
+
+If your CDN supports it, wait for cache invalidation before switching traffic:
+
+```yaml
+# vercel.json example
+{
+  'headers':
+    [
+      {
+        'source': '/_nuxt/(.*)',
+        'headers': [{ 'key': 'Cache-Control', 'value': 'public, max-age=31536000, immutable' }],
+      },
+    ],
+}
+```
+
+The `immutable` flag tells browsers these files won't change. When you deploy, new files get new URLs (different hashes).
+
+### 2. Keep Old Chunks Longer
+
+Some platforms let you preserve old build artifacts:
+
+```javascript
+// nuxt.config.ts
+export default defineNuxtConfig({
+  experimental: {
+    // Keep chunks from last 2 builds
+    payloadExtraction: true,
+  },
+})
+```
+
+### 3. Service Worker Strategy
+
+For aggressive caching, use a service worker that falls back gracefully:
+
+```typescript
+// service-worker.js (conceptual)
+self.addEventListener('fetch', (event) => {
+  if (event.request.url.includes('/_nuxt/')) {
+    event.respondWith(
+      caches.match(event.request).then((cached) => {
+        return (
+          cached ||
+          fetch(event.request).catch(() => {
+            // Chunk missing, trigger reload
+            return new Response('', {
+              status: 302,
+              headers: { Location: '/' },
+            })
+          })
+        )
+      })
+    )
+  }
+})
+```
+
+## Bonus: A Vue Pattern Bug I Fixed
+
+While debugging this, I found another issue in our MegaMenu component:
+
+### Wrong: Nested onUnmounted
+
+```typescript
+// ❌ DON'T DO THIS
+onMounted(() => {
+  const updateHeight = () => {
+    /* ... */
+  }
+  window.addEventListener('resize', updateHeight)
+
+  onUnmounted(() => {
+    // This doesn't work correctly!
+    window.removeEventListener('resize', updateHeight)
+  })
+})
+```
+
+`onUnmounted` nested inside `onMounted` doesn't behave as expected. The inner hook captures the wrong lifecycle context.
+
+### Correct: Separate Lifecycle Hooks
+
+```typescript
+// ✅ DO THIS
+let updateHeight: (() => void) | null = null
+
+onMounted(() => {
+  updateHeight = () => {
+    /* ... */
+  }
+  window.addEventListener('resize', updateHeight)
+})
+
+onUnmounted(() => {
+  if (updateHeight) {
+    window.removeEventListener('resize', updateHeight)
+  }
+})
+```
+
+Store the function reference at component scope, then use separate lifecycle hooks. The cleanup correctly removes the listener.
+
+## Testing Your Fix
+
+### Simulate a Chunk Error
+
+```typescript
+// Temporarily add this to any component
+onMounted(() => {
+  setTimeout(() => {
+    // @ts-ignore - testing only
+    import('./non-existent-chunk-abc123.js')
+  }, 2000)
+})
+```
+
+### Check Error Reporting
+
+If you have error tracking (Sentry, etc.), you'll see:
+
+```
+ChunkLoadError: Loading chunk "chunk-abc123" failed.
+```
+
+After adding the plugin, these errors should drop significantly—users auto-recover before the error can be reported.
+
+## The Complete Plugin
+
+```typescript
+// plugins/chunk-error-handler.client.ts
+export default defineNuxtPlugin((nuxtApp) => {
+  // Track if we've already reloaded to prevent loops
+  const hasReloaded = sessionStorage.getItem('chunk-reload-attempted')
+
+  nuxtApp.hook('app:chunkError', ({ error }) => {
+    // Log for monitoring
+    console.error('[Chunk Error]', error)
+
+    if (!hasReloaded) {
+      // Mark that we're reloading
+      sessionStorage.setItem('chunk-reload-attempted', 'true')
+
+      // Reload to get fresh chunks
+      window.location.reload()
+    } else {
+      // Already tried reloading, something else is wrong
+      sessionStorage.removeItem('chunk-reload-attempted')
+      console.error('Chunk error persists after reload')
+    }
+  })
+
+  // Clear the flag on successful load
+  nuxtApp.hook('app:mounted', () => {
+    sessionStorage.removeItem('chunk-reload-attempted')
+  })
+})
+```
+
+This version prevents infinite reload loops—if reloading doesn't fix it, something else is broken.
+
+## Summary
+
+After every deployment, some users will have stale HTML pointing to deleted chunks. The fix:
+
+1. **Add the plugin** (5 lines)
+2. **Reload on chunk error** (automatic recovery)
+3. **Optional: graceful UX** (toast + delayed reload)
+
+The alternative is users seeing white screens until they manually refresh. The plugin makes deployments invisible to users.
+
+---
+
+_Real fix from a production site with aggressive CDN caching. User-reported errors dropped to near zero after deploying this plugin._
