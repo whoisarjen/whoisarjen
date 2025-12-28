@@ -1,0 +1,252 @@
+---
+title: 'Smart SWR Caching: User-Context Aware Freshness in E-commerce'
+date: 2025-12-28T19:00:00Z
+summary: 'How to implement Stale-While-Revalidate caching that adapts based on user type and endpoint sensitivity. B2B users get fresh stock data while anonymous visitors enjoy faster cached responses.'
+tags: ['Caching', 'SWR', 'Performance', 'E-commerce', 'Node.js', 'TypeScript', 'Redis']
+---
+
+## The Caching Dilemma in E-commerce
+
+Every e-commerce platform faces a fundamental tension: **speed vs. accuracy**.
+
+Caching makes your site fast, but cached data can become stale. In most cases, serving slightly outdated content is fine - a product description or category page doesn't change every minute. But some data is time-sensitive:
+
+- **Stock levels** - Showing "In Stock" when an item just sold out creates a bad customer experience
+- **Pricing** - Promotional prices need to reflect immediately
+- **B2B-specific data** - Business customers often have negotiated pricing or reserved inventory
+
+The traditional approach is binary: either cache everything aggressively (fast but potentially stale) or cache nothing sensitive (accurate but slow). But there's a smarter way.
+
+## Understanding Stale-While-Revalidate (SWR)
+
+SWR is a caching strategy that serves stale content immediately while refreshing the cache in the background:
+
+```
+Request 1: Cache miss → Fetch fresh data → Store in cache → Return data
+Request 2: Cache hit → Return cached data immediately
+Request 3: Cache stale → Return cached data → Background refresh
+Request 4: Cache hit → Return newly refreshed data
+```
+
+The key insight is that users get instant responses (great UX) while the cache stays reasonably fresh (good accuracy). The "staleness window" depends on how often the endpoint gets hit.
+
+For high-traffic pages, SWR works beautifully - the cache refreshes so frequently that staleness is minimal. For low-traffic pages, the staleness might be longer, but that's usually acceptable.
+
+## The Problem: One Size Doesn't Fit All
+
+Here's where it gets interesting. Consider two types of users visiting the same product page:
+
+**Anonymous visitor** browsing products:
+- Primarily interested in product information, images, descriptions
+- Stock accuracy matters, but a few minutes of staleness is acceptable
+- Speed is crucial for conversion
+
+**B2B customer** placing a large order:
+- Needs accurate stock levels for procurement decisions
+- May have custom pricing that must be current
+- Making decisions worth thousands of dollars
+- Can tolerate slightly longer load times for accuracy
+
+Serving the same cached response to both users doesn't make sense. The B2B customer needs fresh data; the anonymous browser needs fast data.
+
+## The Solution: Context-Aware Freshness
+
+The idea is simple: **skip SWR for authenticated users on stock-sensitive endpoints**.
+
+Here's the logic flow:
+
+```
+Is this a stock-sensitive endpoint (products, inventory)?
+├── No → Use SWR normally (all users get cached + background refresh)
+└── Yes → Is user authenticated?
+    ├── No → Use SWR (anonymous users get cached response)
+    └── Yes → Skip SWR (authenticated users always get fresh data)
+```
+
+This gives us the best of both worlds:
+- Anonymous visitors get maximum speed
+- Authenticated B2B users get maximum accuracy
+- The cache still works for most traffic (reducing database load)
+
+## Implementation Pattern
+
+The implementation requires two components: an option flag and a session check.
+
+```typescript
+type CacheOptions = {
+    /** When true, authenticated users always get fresh data */
+    requireFreshForLoggedIn?: boolean;
+};
+```
+
+The cache handler checks this option during the SWR decision:
+
+```typescript
+// Simplified logic
+if (cacheHit && !isStale) {
+    // Fresh cache - serve to everyone
+    return cachedData;
+}
+
+if (cacheHit && isStale) {
+    // Stale cache - decision point
+    const session = await getSession();
+    const skipSWR = options?.requireFreshForLoggedIn && session?.user;
+
+    if (skipSWR) {
+        // Authenticated user on sensitive endpoint
+        // Skip SWR, fetch fresh data
+        return await fetchFreshData();
+    }
+
+    // Anonymous user or non-sensitive endpoint
+    // Use SWR: return stale, refresh in background
+    backgroundRefresh();
+    return cachedData;
+}
+
+// Cache miss - fetch and cache
+return await fetchFreshData();
+```
+
+The key condition is:
+
+```typescript
+!(options?.requireFreshForLoggedIn === true && session?.user)
+```
+
+This reads as: "Skip SWR only when BOTH conditions are true: the endpoint requires fresh data for logged-in users AND the user is logged in."
+
+## Applying the Pattern
+
+Not every endpoint needs this treatment. Here's how to categorize them:
+
+**Endpoints that need fresh data for authenticated users:**
+- Product detail pages (stock, pricing)
+- Product listings (stock availability filters)
+- Cart/checkout APIs
+- Inventory queries
+
+**Endpoints that can use SWR for everyone:**
+- Category pages
+- CMS content
+- Navigation menus
+- Landing pages
+- Static marketing content
+
+**Endpoints that should never cache:**
+- User profile data
+- Order history
+- Payment processing
+
+```typescript
+// Stock-sensitive endpoint
+export default defineCachedHandler(async (event) => {
+    return await fetchProducts();
+}, { requireFreshForLoggedIn: true });
+
+// Non-sensitive endpoint - SWR for everyone
+export default defineCachedHandler(async (event) => {
+    return await fetchLandingPage();
+});
+```
+
+## Separating Concerns: What Data Goes Where
+
+An additional optimization emerged from this pattern: **don't include time-sensitive data in endpoints that don't need it**.
+
+For example, a landing page might display product cards. Originally, we included stock levels and freshness timestamps in the landing page response. But landing pages use SWR caching - so that stock data could be stale anyway.
+
+The solution: only include stock-sensitive fields in endpoints that skip SWR for authenticated users.
+
+| Endpoint | Includes Stock Data | SWR Behavior |
+|----------|---------------------|--------------|
+| `/products` | Yes | Skip for auth users |
+| `/products/:id` | Yes | Skip for auth users |
+| `/landings/:name` | No | Always use SWR |
+| `/content/:slug` | No | Always use SWR |
+
+This has multiple benefits:
+1. Smaller cache entries for landing/content pages
+2. No misleading stock data on pages that might be stale
+3. Clear separation of concerns
+
+## Cache Invalidation Strategy
+
+This pattern works alongside cache invalidation. When product data changes (stock update, price change), you can:
+
+1. **Hard invalidate** - Delete specific cache entries
+2. **Soft invalidate (SWR trigger)** - Mark all entries as stale, triggering background refreshes
+
+The SWR trigger is gentler - it doesn't cause a thundering herd of database queries. Instead, each endpoint refreshes lazily on the next request.
+
+```typescript
+// Soft invalidation - triggers SWR refreshes
+await triggerSWRRevalidation();
+
+// Hard invalidation - clears everything
+await clearCacheCompletely();
+```
+
+For stock updates, we use soft invalidation:
+- Anonymous users continue getting fast (slightly stale) responses
+- Authenticated users get fresh data on their next request
+- The cache repopulates gradually without overloading the database
+
+## Measuring the Impact
+
+The metrics that matter:
+
+**For anonymous users:**
+- Cache hit rate should remain high (above 90%)
+- Response times should stay low (under 100ms for cached)
+- No increase in database queries
+
+**For authenticated users:**
+- Response times will be slightly higher (database queries)
+- But data accuracy is guaranteed
+- Acceptable tradeoff for B2B workflows
+
+**Overall:**
+- Database query volume should decrease (most traffic is anonymous)
+- Stock accuracy complaints should decrease (B2B users get fresh data)
+- Page speed metrics should improve (majority of users get cached responses)
+
+## Edge Cases and Considerations
+
+**Session detection overhead**: Checking authentication adds latency. In our case, the session check happens after serving stale cache to anonymous users, so it doesn't impact their experience.
+
+**Cart/checkout flows**: These should bypass caching entirely, not just skip SWR. The "requireFreshForLoggedIn" pattern is for pages that CAN be cached, not pages that should never be cached.
+
+**API consumers**: If you have B2B APIs (not just web UI), consider adding similar logic for API key authentication, not just session-based auth.
+
+**CDN caching**: If you use a CDN, you'll need to ensure it respects authentication headers and doesn't cache personalized responses for anonymous users.
+
+## The Bigger Picture
+
+This pattern reflects a broader principle: **context-aware optimization**.
+
+Rather than treating all users and all endpoints identically, we analyze the actual requirements:
+- Who is making the request?
+- What data are they requesting?
+- How sensitive is that data to staleness?
+- What tradeoff makes sense for this specific combination?
+
+The same thinking applies to:
+- Image quality (serve lower resolution to mobile on slow connections)
+- Data granularity (send less data to users who don't need it)
+- Feature availability (defer non-critical features for slow devices)
+
+## Conclusion
+
+The "requireFreshForLoggedIn" pattern solves a real problem in e-commerce caching: balancing speed for anonymous visitors against accuracy for authenticated B2B customers.
+
+Key takeaways:
+1. SWR is powerful but one-size-fits-all caching has limitations
+2. User context (authenticated vs. anonymous) should influence caching behavior
+3. Endpoint sensitivity (stock data vs. content) matters too
+4. Separating time-sensitive data from cached endpoints is a clean architectural pattern
+
+The implementation is straightforward - a single option flag and a session check. But the impact is significant: B2B customers trust the data they see, while anonymous visitors enjoy fast page loads.
+
+Sometimes the best caching strategy isn't about caching more or less - it's about caching smarter based on who's asking.
