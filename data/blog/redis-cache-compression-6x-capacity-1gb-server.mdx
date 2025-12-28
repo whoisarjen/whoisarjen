@@ -317,7 +317,7 @@ INFO memory
 Compression isn't always the right choice. Skip it when:
 
 1. **Data is already compressed**: Images, PDFs, pre-compressed assets
-2. **Entries are tiny**: <1KB entries might grow after base64 encoding
+2. **Entries are tiny**: Entries under 1KB might grow after base64 encoding
 3. **CPU is the bottleneck**: If you're already CPU-bound, compression adds load
 4. **Ultra-low latency required**: Sub-millisecond requirements might not tolerate 2ms overhead
 
