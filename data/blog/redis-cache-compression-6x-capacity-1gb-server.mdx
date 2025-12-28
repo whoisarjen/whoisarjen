@@ -227,7 +227,7 @@ Compression isn't free. Here's what we measured:
 |-----------|------|--------|
 | Compression (200KB JSON) | 3-5ms | Added to cache writes |
 | Decompression (40KB gzip) | 1-2ms | Added to cache reads |
-| Base64 encode/decode | <1ms | Negligible |
+| Base64 encode/decode | ~1ms | Negligible |
 
 For a cache hit, we're adding ~2ms of decompression time. But consider:
 - A database query for the same data takes 50-200ms
