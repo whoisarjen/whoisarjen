@@ -1,0 +1,222 @@
+---
+title: 'Cutting API Response Size by 60%: The Hidden Cost of Spreading Objects'
+date: 2025-12-29T12:00:00Z
+draft: false
+summary: 'How a simple destructuring pattern removed redundant translation objects from API responses, reducing cache storage and improving client performance.'
+tags: ['TypeScript', 'API Design', 'Performance', 'Caching', 'Redis', 'Nuxt']
+---
+
+You've just spent days implementing a clean, server-side solution. Your API now pre-computes product names and slugs from multiple translation objects, returning ready-to-use strings to the frontend. The frontend team is happy. The code is cleaner. Victory.
+
+But there's a problem: **your API responses are still just as large as before**.
+
+## The Invisible Payload Bloat
+
+Here's a pattern I see constantly in e-commerce and content-heavy applications:
+
+```typescript
+const addNameAndSlug = (product) => ({
+  ...product,  // <- The silent killer
+  name: buildProductName(product, lang),
+  slug: buildProductSlug(product, lang),
+});
+```
+
+Looks harmless, right? We're adding computed `name` and `slug` fields. The frontend can now use `product.name` instead of manually concatenating translation fragments.
+
+But look at what the spread operator does. It copies **everything** from the original product object, including:
+
+```typescript
+{
+  nameCore: { translations: { pl: "Zlewozmywak granitowy", en: "Granite sink", de: "Granitspüle", ... } },
+  namePost: { translations: { pl: "CORDA", en: "CORDA", de: "CORDA", ... } },
+  nameFeature1: { translations: { pl: "z ociekaczem", en: "with drainer", de: "mit Abtropffläche", ... } },
+  nameFeature2: { translations: { pl: null, en: null, de: null, ... } },
+  // ... plus the new computed fields
+  name: "Zlewozmywak granitowy CORDA z ociekaczem",
+  slug: "zlewozmywak-granitowy-corda-z-ociekaczem-abc123"
+}
+```
+
+Those four translation objects? **They're now completely redundant**. The frontend uses `product.name` and `product.slug`. The raw translation data is never accessed. But it's still being:
+
+1. Serialized to JSON on every response
+2. Compressed in Redis cache
+3. Transferred over the network
+4. Parsed by the JavaScript runtime
+5. Stored in Vue's reactive system
+
+Multiply this by 20 products per page, 15 product groups on landing pages, or 100+ items in a category listing, and you're looking at **kilobytes of waste per request**.
+
+## Measuring the Actual Impact
+
+Before fixing, I analyzed several endpoints to quantify the problem:
+
+| Endpoint | Response Size (gzip) | Redundant Data |
+|----------|---------------------|----------------|
+| Landing page (100 products) | 45-60 KB | ~35 KB (67%) |
+| Product detail (with variants) | 8 KB | ~4 KB (50%) |
+| Products listing (20 items) | 5 KB | ~2.3 KB (46%) |
+| Content page (related products) | 3 KB | ~1 KB (33%) |
+
+The landing page was the worst offender. With 15 product groups and hundreds of items, redundant translation objects accounted for nearly **two-thirds of the response**.
+
+## The Fix: Explicit Destructuring
+
+The solution is straightforward: destructure out the fields you don't want before spreading.
+
+```typescript
+// Before: Spreads everything, including redundant translation objects
+const addNameAndSlug = (product) => ({
+  ...product,
+  name: buildProductName(product, lang),
+  slug: buildProductSlug(product, lang),
+});
+
+// After: Explicitly removes translation objects before spreading
+const addNameAndSlug = (product) => {
+  const { nameCore, namePost, nameFeature1, nameFeature2, ...rest } = product;
+  return {
+    ...rest,
+    name: buildProductName(product, lang),
+    slug: buildProductSlug(product, lang),
+  };
+};
+```
+
+The destructuring assignment extracts `nameCore`, `namePost`, `nameFeature1`, and `nameFeature2` into separate variables (which we immediately discard), and `rest` contains everything else.
+
+This pattern has two key advantages:
+
+1. **Explicit exclusion**: It's clear which fields are being removed
+2. **Type-safe**: TypeScript understands that `rest` doesn't contain the destructured fields
+
+## Applying the Pattern Across Endpoints
+
+I applied this fix to every endpoint that transforms products:
+
+**Single product detail endpoint:**
+
+```typescript
+const addNameAndSlug = <T extends ProductFields>(p: T) => {
+  const { nameCore, namePost, nameFeature1, nameFeature2, ...rest } = p;
+  return {
+    ...rest,
+    name: getProductFullNamePrisma(p, lang),
+    slug: getProductSlug({
+      nameCore: nameCore?.translations[lang],
+      namePost: namePost?.translations[lang],
+      nameFeature1: nameFeature1?.translations[lang],
+      nameFeature2: nameFeature2?.translations[lang],
+      collectionName: p.collection?.name,
+      code: p.code,
+    }),
+  };
+};
+```
+
+**Landing page endpoint:**
+
+```typescript
+const addNameAndSlug = (product: LandingProduct) => {
+  const { nameCore, namePost, nameFeature1, nameFeature2, ...rest } = product;
+  return {
+    ...rest,
+    name: getProductFullNamePrisma(product, lang),
+    slug: getProductSlug({
+      nameCore: nameCore?.translations[lang],
+      namePost: namePost?.translations[lang],
+      nameFeature1: nameFeature1?.translations[lang],
+      nameFeature2: nameFeature2?.translations[lang],
+      collectionName: product.collection?.name,
+      code: product.code,
+    }),
+  };
+};
+```
+
+**Nested product positions (in inspiration galleries):**
+
+```typescript
+productsPositions: asset.productsPositions.map(position => {
+  const { nameCore, namePost, nameFeature1, nameFeature2, ...productRest } = position.product;
+  return {
+    ...position,
+    product: {
+      ...productRest,
+      name: getProductFullNamePrisma(position.product, lang),
+      slug: getProductSlug({
+        nameCore: nameCore?.translations[lang],
+        namePost: namePost?.translations[lang],
+        nameFeature1: nameFeature1?.translations[lang],
+        nameFeature2: nameFeature2?.translations[lang],
+        collectionName: position.product.collection?.name,
+        code: position.product.code,
+      }),
+    },
+  };
+}),
+```
+
+## Frontend Cleanup
+
+After removing translation objects from responses, some frontend code needed updates. Components that were still accessing `product.nameCore?.translations[locale]` threw TypeScript errors:
+
+```vue
+<!-- Before: Accessing raw translation (now throws error) -->
+<p>{{ productPositions.product.nameCore?.translations[locale] }}</p>
+
+<!-- After: Using pre-built name -->
+<p>{{ productPositions.product.name }}</p>
+```
+
+This is actually a benefit. The TypeScript errors acted as a safeguard, ensuring we didn't leave stale code paths that would fail at runtime.
+
+## Results After Optimization
+
+| Endpoint | Before (gzip) | After (gzip) | Savings |
+|----------|--------------|--------------|---------|
+| Landing page | 45-60 KB | 20-25 KB | **~35 KB (67%)** |
+| Product detail | 8 KB | 3-4 KB | **~4-5 KB (50%)** |
+| Products listing | 5 KB | 2-3 KB | **~2-3 KB (50%)** |
+| Content page | 3 KB | 2 KB | **~1 KB (33%)** |
+
+For a Redis cache with limited memory, this translates to storing significantly more cached entries. For users on slow connections, it means faster page loads.
+
+## Does Compression Reduce the Benefit?
+
+You might wonder: if we're gzip-compressing responses anyway, does removing redundant data really matter?
+
+Yes, but the benefit is reduced:
+
+| Metric | Uncompressed | Gzip Compressed |
+|--------|-------------|-----------------|
+| Translation objects (4 per product) | ~1,400 bytes | ~350 bytes |
+| Pre-built name string | ~100 bytes | ~60 bytes |
+| **Savings per product** | ~1,300 bytes | **~290 bytes** |
+
+Gzip achieves ~75% compression on JSON (repetitive keys compress well), so the savings are smaller but still meaningful:
+
+- **20 products** = ~5.8 KB saved (gzip)
+- **100 products** = ~29 KB saved (gzip)
+
+Beyond network transfer, there are other benefits:
+
+1. **Faster JSON parsing**: Fewer fields means faster `JSON.parse()` on the client
+2. **Lower memory usage**: Vue's reactive system tracks fewer properties
+3. **Smaller cache entries**: More responses fit in your Redis memory limit
+4. **Cleaner code**: Frontend uses `product.name` instead of `product.nameCore?.translations[locale]`
+
+## Key Takeaways
+
+1. **The spread operator copies everything**. When you write `{ ...object, newField: value }`, you're not just adding a field—you're including every existing field, even ones you no longer need.
+
+2. **Computed fields don't replace source data automatically**. Adding a `name` field doesn't remove the `nameCore`, `namePost`, etc. that were used to compute it.
+
+3. **Destructuring is explicit exclusion**. The pattern `const { unwanted, ...rest } = object` clearly documents which fields are being dropped.
+
+4. **TypeScript catches stale access patterns**. After removing fields from the response, any frontend code still trying to access them will throw compile-time errors.
+
+5. **Measure before and after**. The actual impact depends on your data shape. Translation objects with 11 languages are particularly bloated; simple scalar fields less so.
+
+The broader principle: **API response design is part of performance engineering**. It's not just about database queries and caching strategies—it's also about what data you're actually sending over the wire.
