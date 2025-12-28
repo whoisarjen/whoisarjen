@@ -1,0 +1,179 @@
+---
+title: 'The Subtle SSR Caching Bug That Fragments Your Cache: Why url.hostname Lies During Server Rendering'
+date: 2025-12-28T12:00:00Z
+lastmod: '2025-12-28'
+draft: false
+summary: 'How a seemingly correct cache key using url.hostname causes cache fragmentation between SSR and client requests, dramatically reducing cache hit rates in Nuxt/Nitro applications.'
+tags: ['Nuxt', 'SSR', 'Caching', 'Performance', 'Nitro', 'TypeScript']
+---
+
+## The Problem That Hides in Plain Sight
+
+You've implemented a caching layer for your Nuxt API endpoints. The code looks correct:
+
+```typescript
+const url = getRequestURL(event);
+const cacheKey = encodeURIComponent(url.hostname + url.pathname + url.search);
+```
+
+You're using the hostname to ensure cache keys are unique across different domains in your monorepo. Smart, right?
+
+**Wrong.** This innocent-looking line is silently fragmenting your cache, causing Googlebot to get different cached data than your users, and dramatically reducing your cache hit rate.
+
+## The Root Cause: SSR Hostname Inconsistency
+
+When Nitro's `getRequestURL(event)` extracts the hostname, it reconstructs the URL from HTTP request headers. The problem? **The hostname varies based on request context:**
+
+| Request Context | `url.hostname` Returns | Expected |
+|----------------|----------------------|----------|
+| SSR (Googlebot crawl) | `localhost` or internal IP | `deante.pl` |
+| Browser request | `deante.pl` | `deante.pl` |
+| Vercel Preview | `deante-git-xxx.vercel.app` | `deante.pl` |
+
+During SSR, when your Nuxt server fetches data internally (or when a crawler triggers server-side rendering), the `Host` header often doesn't contain your actual domain. Instead, you get:
+
+- `localhost` during development
+- Internal IPs or localhost during SSR on production
+- Dynamic Vercel preview URLs on staging
+
+## The Cache Fragmentation Problem
+
+Here's what actually happens:
+
+```
+1. Googlebot requests /products
+   → SSR runs, getRequestURL returns hostname = "localhost"
+   → Cache key: "localhost/api/public/products?page=1"
+   → Cache MISS → Data generated and cached
+
+2. Real user visits /products
+   → Browser makes request with Host: deante.pl
+   → Cache key: "deante.pl/api/public/products?page=1"
+   → Cache MISS (different key!) → Data generated AGAIN
+
+3. Another user visits /products
+   → Cache key: "deante.pl/api/public/products?page=1"
+   → Cache HIT (finally!)
+```
+
+You now have **two separate cache entries** for the exact same data. Googlebot is serving potentially stale content, and you're doing redundant work.
+
+## The Solution: Hardcode the Domain
+
+Since the hostname should be constant for a given application (your production domain won't change), just hardcode it:
+
+```typescript
+// Before: Dynamic hostname (broken)
+const cacheKey = encodeURIComponent(url.hostname + url.pathname + url.search);
+
+// After: Static hostname (correct)
+const cacheKey = encodeURIComponent('deante.pl' + url.pathname + url.search);
+```
+
+If you're in a monorepo with multiple apps sharing the same cache utility, each app gets its hardcoded domain:
+
+```typescript
+// apps/deante.pl/src/server/utils/cache.utils.server.ts
+const cacheKey = encodeURIComponent('deante.pl' + url.pathname + url.search);
+
+// apps/deantedesign.studio/src/server/utils/cache.utils.server.ts
+const cacheKey = encodeURIComponent('deantedesign.studio' + url.pathname + url.search);
+```
+
+## Why Not Use Runtime Config?
+
+You might think: "I'll use `runtimeConfig.public.fullSitePath` instead of hardcoding!"
+
+```typescript
+const config = useRuntimeConfig();
+const siteHostname = new URL(config.public.fullSitePath).hostname;
+const cacheKey = encodeURIComponent(siteHostname + url.pathname + url.search);
+```
+
+This works, but consider:
+
+1. **Your production domain won't change** - hardcoding is simpler
+2. **Preview deployments** - `NUXT_PUBLIC_VERCEL_URL` gives you dynamic Vercel URLs, which might still fragment cache if you want preview and production to share cache
+3. **Less runtime overhead** - no URL parsing needed
+
+For most cases, hardcoding is the pragmatic choice.
+
+## The Broader Lesson
+
+This bug teaches an important principle: **never trust request-derived values for cache keys when SSR is involved.**
+
+Other values that can vary between SSR and client:
+- `Host` header (as we discussed)
+- `User-Agent` (affects SSR detection)
+- `X-Forwarded-*` headers (depend on proxy configuration)
+- Cookie-based values (may not forward during internal SSR calls)
+
+For cache keys, prefer:
+- Static, hardcoded identifiers
+- URL path and query parameters only
+- Values from environment variables set at build time
+
+## Full Implementation
+
+Here's our production caching utility after the fix:
+
+```typescript
+import { defineEventHandler, type H3Event } from 'h3';
+import pako from 'pako';
+
+const TTL = 259200; // 3 days
+const SWR_INVALIDATION_KEY = 'cache:flag:swr';
+
+type CacheEntry<T> = {
+    data: T;
+    createdAt: number;
+};
+
+export const defineCustomCacheEventHandler = <T>(
+    handler: (event: H3Event) => T | Promise<T>,
+) => {
+    return defineEventHandler(async (event: H3Event) => {
+        if (process.env.NODE_ENV === 'development') {
+            return await handler(event);
+        }
+
+        const url = getRequestURL(event);
+        // Hardcoded domain - consistent across SSR and client
+        const cacheKey = encodeURIComponent('deante.pl' + url.pathname + url.search);
+        const storage = useStorage('cache');
+
+        const cached = await storage.getItem<string>(cacheKey);
+        if (cached) {
+            const entry = decompress<T>(cached);
+            if (entry) return entry.data;
+        }
+
+        const result = await handler(event);
+        const compressed = compress({ data: result, createdAt: Date.now() });
+        await storage.setItem(cacheKey, compressed, { ttl: TTL });
+
+        return result;
+    });
+};
+```
+
+## Debugging Tips
+
+To verify your cache is working correctly:
+
+1. **Check cache logs** - Add logging to see the actual cache keys:
+   ```typescript
+   console.log(`[Cache] Key: ${cacheKey}`);
+   ```
+
+2. **Compare SSR vs client** - Make a request via `curl` (SSR-like) and browser, check if keys match
+
+3. **Monitor Redis/cache directly** - Look for duplicate entries with different hostname prefixes
+
+## Conclusion
+
+The `url.hostname` inconsistency between SSR and client requests is a subtle but impactful bug. It silently fragments your cache, wastes compute resources, and can cause SEO issues when crawlers get different cached content than users.
+
+The fix is trivial: hardcode your production domain. Your domain isn't going to change, and the simplicity pays off in consistent cache behavior across all request contexts.
+
+Next time you implement caching in an SSR context, remember: **request headers lie during server-side rendering.**
