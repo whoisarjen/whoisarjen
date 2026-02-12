@@ -1,0 +1,174 @@
+---
+title: 'Why CSS radial-gradient Killed My Scroll Performance (and the 1-Line SVG Fix)'
+date: 2026-02-12T12:00:00Z
+lastmod: '2026-02-12'
+summary: 'A repeating radial-gradient that looked great in design turned my page into a laggy mess. Here is how I tracked it down and fixed it with an inline SVG data URI — zero visual difference, smooth 60fps scrolling.'
+tags: ['CSS', 'Performance', 'SVG', 'Nuxt', 'Web Vitals']
+---
+
+## The Symptom Nobody Could Explain
+
+I was redesigning the hero section of [Digital Nomad](https://github.com/whoisarjen/digital-nomad), a city comparison tool for remote workers. The new design featured a dark background with a subtle dot grid pattern — a common visual pattern you see on modern landing pages.
+
+Everything looked sharp. Then I started scrolling.
+
+The entire page stuttered. Cards appeared with a visible delay. The browser was clearly struggling, yet there were no animations, no `backdrop-blur`, no heavy JavaScript running. Chrome DevTools showed paint times spiking on every scroll frame.
+
+I spent hours chasing the wrong suspects: lazy-loaded images, Vue component count, scroll event listeners, Nuxt DevTools overhead. None of them were the culprit.
+
+The problem was **two CSS declarations**.
+
+## The Expensive Pattern
+
+Here's what the hero section looked like:
+
+```html
+<!-- Dot grid: radial-gradient repeated across the entire viewport -->
+<div
+  class="absolute inset-0 opacity-[0.07]"
+  style="background-image: radial-gradient(circle, rgba(255,255,255,0.5) 1px, transparent 1px);
+         background-size: 24px 24px;"
+/>
+
+<!-- Glow: two large elliptical gradients -->
+<div
+  class="absolute inset-0"
+  style="background: radial-gradient(ellipse 60% 50% at 20% 20%, rgba(42,157,143,0.15) 0%, transparent 70%),
+                      radial-gradient(ellipse 50% 60% at 80% 80%, rgba(6,182,212,0.1) 0%, transparent 70%);"
+/>
+```
+
+Visually? Beautiful. A subtle dot grid with a soft teal glow. The kind of thing that looks effortless in Figma.
+
+Under the hood? A disaster.
+
+## Why This Is Expensive
+
+### The Dot Grid Math
+
+The `radial-gradient` with `background-size: 24px 24px` creates a repeating pattern. On a typical 1920×816 viewport (85vh hero), the browser computes:
+
+- **80 columns × 34 rows = ~2,720 gradient circles**
+- Each circle requires computing a radial gradient from center to edge
+- This computation happens **on every composite frame** during scrolling
+
+Unlike a rasterized image that the GPU tiles efficiently, CSS gradients are recalculated by the rendering engine. When the element participates in scrolling (which it does, because it's inside the scrollable page), the browser repaints it on every frame.
+
+### The Glow Gradients
+
+The two large elliptical gradients covering the full viewport add even more work:
+
+- Two gradient layers composited together
+- Each covers ~70% of the viewport with color stops
+- Combined with the dot grid layer above, the browser is compositing **3 full-viewport gradient layers** per frame
+
+### The Compositing Stack
+
+Add a `position: fixed` header on top (which forces its own compositing layer), and now the browser is blending:
+
+1. The dark background
+2. The dot grid gradient layer
+3. The glow gradient layer
+4. The content layer
+5. The fixed header layer
+
+That's 5 compositing layers recalculated on every scroll frame. No wonder it lagged.
+
+## The Fix: Inline SVG Data URI
+
+The dot grid pattern doesn't need to be a gradient. It's a static, repeating visual — exactly what tiled images are for. But I didn't want to add an external image file for a decorative dot.
+
+The solution: an inline SVG encoded as a data URI.
+
+```html
+<!-- Before: expensive radial-gradient (recalculated per frame) -->
+<div
+  class="absolute inset-0 opacity-[0.07]"
+  style="background-image: radial-gradient(circle, rgba(255,255,255,0.5) 1px, transparent 1px);
+         background-size: 24px 24px;"
+/>
+
+<!-- After: SVG data URI (rasterized once, GPU-tiled) -->
+<div
+  class="absolute inset-0 opacity-[0.07]"
+  style="background-image: url(&quot;data:image/svg+xml,%3Csvg width='24' height='24' xmlns='http://www.w3.org/2000/svg'%3E%3Ccircle cx='12' cy='12' r='1' fill='rgba(255,255,255,0.5)'/%3E%3C/svg%3E&quot;);"
+/>
+```
+
+Same visual result. The SVG is a 24×24 tile with a single circle — identical to what the gradient produced. But now the browser:
+
+1. Parses the SVG once
+2. Rasterizes it into a bitmap
+3. Tiles it using the GPU's texture repeat — essentially free
+
+No per-frame gradient computation. No repaints on scroll.
+
+### What About the Glow?
+
+I removed the glow gradients entirely. They were subtle enough that their absence is barely noticeable, but their performance cost was significant. If you need a similar effect, consider:
+
+- A pre-rendered PNG/WebP overlay (loaded once, composited by GPU)
+- A single simpler gradient instead of two stacked ones
+- Applying `will-change: transform` to promote the element to its own GPU layer (use sparingly)
+
+## Other Scroll Performance Killers I Found
+
+While debugging this, I identified several other patterns that compound the problem:
+
+### Gradient Overlays on Card Images
+
+```html
+<!-- 20 cards × 1 gradient each = 20 gradient layers during scroll -->
+<div class="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/50 to-transparent" />
+```
+
+Each card had a gradient overlay for text readability. With 20 cards visible, that's 20 additional gradient layers being composited during scroll. I removed them and gave the weather pill a slightly darker background instead.
+
+### Shadow Transitions on Hover
+
+```html
+<!-- Triggers repaint on every card during mouse movement -->
+<div class="shadow-sm hover:shadow-md">
+```
+
+Changing `box-shadow` on hover forces a repaint of the element. With 20 cards in the viewport, moving your mouse across the grid triggers constant repaints. I removed the hover shadow change — the cards look fine with a static `shadow-sm`.
+
+### Colored Shadows
+
+```html
+<!-- Colored shadows require extra compositing -->
+<div class="shadow-lg shadow-accent-500/25">
+```
+
+`shadow-accent-500/25` creates a colored, semi-transparent shadow. This requires the browser to composite the shadow color with the background on every paint. I replaced it with no shadow on the CTA button — it's on a dark background where shadows aren't even visible.
+
+### Fixed Header with Opacity
+
+```html
+<!-- opacity forces compositing on every scroll frame -->
+<header class="fixed bg-[#060E1B]/90">
+```
+
+A fixed element with opacity (`/90` = 90% opacity) creates a compositing layer that the browser must blend with content below on every frame. Switching to a solid color (`bg-[#060E1B]`) eliminates the alpha compositing entirely.
+
+## The Checklist
+
+If your page lags on scroll, check for these patterns:
+
+| Pattern | Cost | Fix |
+| --- | --- | --- |
+| `radial-gradient` with small `background-size` | High | SVG data URI |
+| Multiple stacked gradient layers | High | Remove or pre-render |
+| `gradient-to-t/b` on many repeated elements | Medium | Remove or use solid colors |
+| `hover:shadow-*` on card grids | Medium | Static shadow only |
+| Colored/transparent shadows | Medium | Standard shadows or none |
+| `position: fixed` with opacity | Medium | Solid background color |
+| `backdrop-blur` | Very High | Avoid entirely |
+
+## Result
+
+Before the fix, scrolling was visibly janky — cards appeared to "pop in" and the page felt sluggish. After replacing the gradient with an SVG data URI and removing the stacked gradient layers, scrolling is smooth at 60fps.
+
+The visual difference? None. The dot grid looks identical. The glow is gone but nobody noticed.
+
+Sometimes the most impactful performance fix is deleting a CSS property.
