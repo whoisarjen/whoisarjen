@@ -52,7 +52,7 @@ export async function getGitHubProjects(): Promise<GitHubProject[]> {
     })
 }
 
-function getScreenshotUrl(url: string): string {
+export function getScreenshotUrl(url: string): string {
   // Weekly cache key — screenshots refresh once per week
   const now = new Date()
   const weekKey = `${now.getFullYear()}-W${Math.ceil(((now.getTime() - new Date(now.getFullYear(), 0, 1).getTime()) / 86400000 + 1) / 7)}`

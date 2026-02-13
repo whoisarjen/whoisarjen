@@ -28,7 +28,9 @@ const overrides: Record<string, Partial<Project>> = {
   },
 }
 
-// Extra projects that are NOT on GitHub (cooperations, sold, abandoned, etc.)
+// Extra projects that are NOT on GitHub.
+// Projects with a live href get dynamic Microlink screenshots.
+// Projects without a live site use hardcoded images.
 const extraProjects: Project[] = [
   {
     title: 'Deante',
@@ -36,6 +38,20 @@ const extraProjects: Project[] = [
       'A collaborative project developed with Deante, a leading Polish manufacturer of kitchen and bathroom fittings.',
     imgSrc: '/static/images/projects/project-deante.png',
     href: 'https://deante.pl',
+  },
+  {
+    title: 'Deante Design Studio',
+    description:
+      'A platform for architects and designers featuring 3D models, bathroom and kitchen collections, and design resources from Deante.',
+    imgSrc: '/static/images/projects/project-deante-design-studio.png',
+    href: 'https://deantedesign.studio',
+  },
+  {
+    title: 'Comscore',
+    description:
+      'A trusted media measurement platform providing cross-platform audience analytics and advertising evaluation services.',
+    imgSrc: '/static/images/projects/project-comscore.png',
+    href: 'https://www.comscore.com',
   },
   {
     title: 'Arjenworld',
