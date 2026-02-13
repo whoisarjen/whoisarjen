@@ -71,6 +71,14 @@ module.exports = () => {
           protocol: 'https',
           hostname: 'picsum.photos',
         },
+        {
+          protocol: 'https',
+          hostname: 'api.microlink.io',
+        },
+        {
+          protocol: 'https',
+          hostname: '**.microlink.io',
+        },
       ],
     },
     async headers() {

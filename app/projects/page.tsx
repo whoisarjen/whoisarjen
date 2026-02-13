@@ -1,10 +1,12 @@
-import projectsData from '@/data/projectsData'
+import { getProjects } from '@/data/projectsData'
 import Card from '@/components/Card'
 import { genPageMetadata } from 'app/seo'
 
 export const metadata = genPageMetadata({ title: 'Projects' })
 
-export default function Projects() {
+export default async function Projects() {
+  const projectsData = await getProjects()
+
   return (
     <>
       <div className="divide-y divide-gray-200 dark:divide-gray-700">
@@ -22,7 +24,6 @@ export default function Projects() {
                 description={d.description}
                 imgSrc={d.imgSrc}
                 href={d.href}
-                status={d.status}
               />
             ))}
           </div>
