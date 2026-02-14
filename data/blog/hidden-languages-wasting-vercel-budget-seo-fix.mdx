@@ -1,0 +1,196 @@
+---
+title: 'How Unpublished Languages Silently Drained Our Vercel Budget and Tanked Mobile Performance'
+date: 2026-02-14T12:00:00Z
+lastmod: '2026-02-14'
+summary: 'We added Arabic and Portuguese to our Nuxt i18n setup but blocked them from production. The problem? Sitemaps, hreflang tags, and crawlers didn't get the memo — generating thousands of wasted URLs, doubling API calls, and burning through serverless invocations.'
+tags: ['Nuxt', 'i18n', 'Vercel', 'SEO', 'Performance', 'Sitemap']
+---
+
+We run a multilingual e-commerce site built with Nuxt, supporting 11 languages. When we added Arabic and Portuguese — bringing the total to 13 — we weren't ready to go live with them yet. So we did the obvious thing: blocked `/ar/` and `/pt/` in `robots.txt` and hid them from the language picker.
+
+Problem solved, right?
+
+A week later, our Vercel usage spiked. Google Search Console mobile performance dropped from green to yellow. Something was off.
+
+## The Investigation
+
+After a deep audit across sitemaps, hreflang tags, translation loading, and bundle analysis, we found **five separate issues** — all stemming from one root cause: the language restriction was only applied in two places, while the rest of the codebase happily generated content for all 13 languages.
+
+Here's what was happening behind the scenes.
+
+## Issue 1: Sitemaps Were Advertising Blocked Pages
+
+Our site generates sitemaps dynamically — products, collections, categories, news, inspirations, and designers. Each sitemap handler pulled the language list from the i18n runtime config:
+
+```typescript
+const languages = (useRuntimeConfig().public.i18n.locales ?? [])
+  .map((option: any) => option.code) as Language[]
+```
+
+This returned all 13 languages. Every product URL was generated 13 times. With ~2,000 products alone, that meant **~4,000 wasted sitemap entries** just for AR and PT — across 6 content types, roughly **~5,000 unnecessary URLs** total.
+
+Search engine crawlers discovered these URLs through the sitemap, attempted to crawl them, hit the `robots.txt` disallow, and moved on. But the damage was done — each crawl attempt consumed a serverless function invocation on Vercel, and the wasted crawl budget meant real pages got crawled less frequently.
+
+## Issue 2: Hreflang Tags Were Sending Contradictory Signals
+
+Every page on the site included `<link rel="alternate" hreflang="...">` tags for **all 13 languages**:
+
+```html
+<link rel="alternate" hreflang="pl" href="https://example.com/produkt/xyz" />
+<link rel="alternate" hreflang="en" href="https://example.com/en/product/xyz" />
+<!-- ... 9 more productive languages ... -->
+<link rel="alternate" hreflang="ar" href="https://example.com/ar/منتج/xyz" />
+<link rel="alternate" hreflang="pt" href="https://example.com/pt/produto/xyz" />
+```
+
+Google saw two conflicting signals:
+1. **Hreflang**: "This page exists in Arabic at this URL"
+2. **Robots.txt**: "Don't crawl anything under `/ar/`"
+
+This is exactly the kind of mixed signal that confuses search engines and wastes crawl budget. Google has to process the hreflang, attempt the URL, discover it's blocked, and discard the result. Multiply that by every page on the site.
+
+## Issue 3: No noindex Safety Net
+
+If a crawler somehow bypassed `robots.txt` (which can happen — `robots.txt` is advisory, not enforced), there was no `<meta name="robots" content="noindex, nofollow">` tag on restricted language pages. The only protection was a single line in `robots.txt`.
+
+## Issue 4: The Restriction Logic Was Scattered
+
+The AR/PT restriction existed in exactly two places:
+
+1. `LanguagePicker.vue` — a local `HIDDEN_LANGUAGES` constant
+2. `nuxt.config.ts` — hardcoded `/ar/` and `/pt/` in the robots disallow array
+
+These two places had no connection. If someone added a third restricted language, they'd need to know about both files. And neither file had any effect on sitemaps, hreflang tags, or meta robots.
+
+## Issue 5: Global Prefetch Was Accidentally Re-enabled
+
+During our Nuxt 3 to Nuxt 4 migration, the global `experimental.defaults.nuxtLink.prefetch: false` setting was removed from `nuxt.config.ts`. While our custom `CustomNuxtLink` component still had `prefetch: false`, any `NuxtLink` rendered internally by Nuxt modules (content, UI libraries) would now prefetch by default — triggering additional serverless function calls on hover.
+
+## The Fix: One Constant to Rule Them All
+
+The solution was surprisingly simple. We created a single `RESTRICTED_LANGUAGES` constant as the source of truth:
+
+```typescript
+// global.constant.ts
+export const RESTRICTED_LANGUAGES: readonly Language[] = ['ar', 'pt'] as const
+```
+
+Then we wired it into every system that needed to know about restricted languages:
+
+### Sitemaps — Filter Before Generating
+
+```typescript
+const languages = (useRuntimeConfig().public.i18n.locales ?? [])
+  .map((option: any) => option.code) as Language[])
+  .filter(lang => !RESTRICTED_LANGUAGES.includes(lang))  // One line added
+```
+
+Applied to all 6 sitemap handlers. Instant elimination of ~5,000 wasted URLs.
+
+### Hreflang — Filter the Output
+
+```typescript
+useHead({
+  link: () => (i18nHead.value.link || []).filter(link =>
+    !RESTRICTED_LANGUAGES.some(lang =>
+      link.hreflang === lang || link.href?.includes(`/${lang}/`)
+    )
+  ),
+})
+```
+
+Every page now outputs only 11 productive hreflang tags instead of 13.
+
+### Meta Robots — Add noindex as Safety Net
+
+```typescript
+const isRestrictedLanguage = computed(() =>
+  RESTRICTED_LANGUAGES.includes(locale.value as typeof RESTRICTED_LANGUAGES[number])
+)
+
+useHead({
+  meta: [
+    ...(isRestrictedLanguage.value || hasFilterParams.value
+      ? [{ name: 'robots', content: 'noindex, nofollow' }]
+      : []
+    )
+  ]
+})
+```
+
+### Robots.txt — Dynamic From Constant
+
+```typescript
+// nuxt.config.ts
+disallow: [
+  ...RESTRICTED_LANGUAGES.map(lang => `/${lang}/`),
+  // ... other disallowed paths
+],
+```
+
+### Language Picker — Use Shared Constant
+
+```typescript
+// Before: local constant with no connection to other systems
+const HIDDEN_LANGUAGES = ['ar', 'pt'] as const
+
+// After: shared constant, single source of truth
+import { RESTRICTED_LANGUAGES } from '~/constants/global.constant'
+```
+
+### Prefetch — Re-enable Global Disable
+
+```typescript
+// nuxt.config.ts
+experimental: {
+  defaults: {
+    nuxtLink: {
+      prefetch: false,
+    },
+  },
+},
+```
+
+## The Result
+
+| What Changed | Before | After |
+|---|---|---|
+| Wasted sitemap URLs | ~5,000 | 0 |
+| Hreflang tags per page | 13 (2 for blocked languages) | 11 (all productive) |
+| noindex on restricted pages | None | Yes |
+| Places to update when adding/removing a restricted language | 2+ (easy to miss) | 1 constant |
+| Prefetch protection | Component-level only | Global + component |
+
+The total change was 10 files, 53 lines added, 27 removed. Most of the work was the same one-line filter applied across 6 sitemap handlers.
+
+## Why This Matters for Vercel Costs
+
+Every unnecessary URL in a sitemap is a potential serverless function invocation. Search engine bots crawl sitemaps methodically — if you list 5,000 URLs that lead to blocked pages, that's 5,000 function calls that serve a `robots.txt` disallow response. On Vercel's pricing model, where you pay per function invocation, this adds up fast.
+
+But the indirect cost is worse. Google allocates a **crawl budget** to each site. Every request wasted on a blocked URL is a request that could have been used to index a real, revenue-generating page. When your sitemap is 15% junk URLs, your real content gets crawled 15% less frequently.
+
+## Lessons Learned
+
+**1. "Blocking" a feature requires blocking it everywhere.** Hiding something from the UI and `robots.txt` is not enough. You need to think about sitemaps, hreflang, meta tags, and any other system that enumerates your content.
+
+**2. Scattered configuration is a liability.** Two files with the same hardcoded values is a bug waiting to happen. A single constant that flows through the entire system is easier to maintain and impossible to partially update.
+
+**3. Contradictory SEO signals are worse than no signals.** Having hreflang tags that point to robots.txt-blocked URLs is actively harmful. Search engines waste resources processing conflicting instructions, and your crawl budget suffers.
+
+**4. Framework migrations can silently change defaults.** Our Nuxt 3 to 4 migration dropped the global `prefetch: false` setting. The app still worked, but the performance characteristics changed in ways that only showed up in production metrics.
+
+**5. Monitor after every deployment.** We caught this because we noticed the Vercel usage spike and Google Search Console regression. Without monitoring, these issues could have persisted for months, silently burning budget and degrading SEO.
+
+## Checklist for Multilingual Sites
+
+If you're running a multilingual site with some languages in a "not yet ready" state, verify all of these:
+
+- [ ] Languages excluded from sitemap generation
+- [ ] No hreflang tags pointing to blocked language URLs
+- [ ] `<meta name="robots" content="noindex, nofollow">` on restricted language pages
+- [ ] `robots.txt` disallows restricted language paths
+- [ ] Language picker hides restricted languages from users (and SSR)
+- [ ] All restriction logic flows from a single constant/config
+- [ ] Global `NuxtLink` prefetch disabled (if you don't want speculative loading)
+
+Miss any one of these, and you're leaking serverless invocations, wasting crawl budget, or sending contradictory signals to search engines.
