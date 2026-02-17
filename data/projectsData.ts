@@ -11,6 +11,7 @@ export type Project = {
 
 // Display order for GitHub projects. Projects not listed here appear after these.
 const displayOrder: string[] = [
+  'Ratio',
   'Parallax',
   'Juicify Open Source',
   'Digital Nomad',
