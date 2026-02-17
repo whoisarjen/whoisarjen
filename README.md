@@ -28,6 +28,7 @@ Full-stack engineer who ships products and obsesses over performance. I build mu
 
 | Project | Description | Stack |
 |---------|-------------|-------|
+| [**Ratio**](https://ratio.whoisarjen.com) | Open source Polish B2B tax calculator — compare tax forms, ZUS, and IP BOX | Nuxt 4, TypeScript, Tailwind CSS |
 | [**Parallax**](https://parallax-alpha-cyan.vercel.app) | Real-time planning poker for agile teams — no sign-ups, just estimate | Nuxt 4, Supabase, Tailwind CSS |
 | [**Deante**](https://deante.pl) | Multi-market e-commerce platform (11 languages, full-text search, Redis caching) | Nuxt 3, PostgreSQL, Redis |
 | [**Juicify**](https://juicify.whoisarjen.com) | AI-powered fitness & nutrition tracking with real-time dietary coaching | Next.js, tRPC, Prisma, Neon |
