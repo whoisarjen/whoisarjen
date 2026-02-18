@@ -4,6 +4,8 @@ import Main from './Main'
 import { getProjects } from '@/data/projectsData'
 import siteMetadata from '@/data/siteMetadata'
 
+export const revalidate = 86400 // 1 day
+
 export default async function Page() {
   const sortedPosts = sortPosts(allBlogs)
   const posts = allCoreContent(sortedPosts).slice(0, siteMetadata.postsPerPage)
