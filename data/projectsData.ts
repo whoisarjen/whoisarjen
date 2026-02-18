@@ -24,6 +24,7 @@ const displayOrder: string[] = [
 const overrides: Record<string, Partial<Project>> = {
   Investo: {
     href: 'https://investo.whoisarjen.com',
+    imgSrc: '/static/images/projects/project-investo.png',
   },
   'Juicify Open Source': {
     title: 'Juicify',
