@@ -11,6 +11,7 @@ export type Project = {
 
 // Display order for GitHub projects. Projects not listed here appear after these.
 const displayOrder: string[] = [
+  'Ebooks',
   'Investo',
   'Ratio',
   'Parallax',
@@ -22,6 +23,11 @@ const displayOrder: string[] = [
 // Overrides keyed by formatted repo name (after formatRepoName in lib/github.ts).
 // Use this to customize how a specific GitHub repo appears.
 const overrides: Record<string, Partial<Project>> = {
+  Ebooks: {
+    title: 'MyPress',
+    href: 'https://mypress.whoisarjen.com',
+    imgSrc: '/static/images/projects/project-mypress.png',
+  },
   Investo: {
     href: 'https://investo.whoisarjen.com',
     imgSrc: '/static/images/projects/project-investo.png',
