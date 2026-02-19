@@ -5,7 +5,7 @@ import NewsletterForm from 'pliny/ui/NewsletterForm'
 import Image from '@/components/Image'
 
 const MAX_POSTS_DISPLAY = 10
-const MAX_PROJECTS_DISPLAY = 13
+const MAX_PROJECTS_DISPLAY = 17
 
 export default function Home({ posts, projects }) {
   return (
