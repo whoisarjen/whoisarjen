@@ -119,7 +119,7 @@ export async function getProjects(): Promise<Project[]> {
     // If no imgSrc override was set, check if a local file exists at the
     // conventional path: /static/images/projects/project-<repoName>.png
     if (!override?.imgSrc) {
-      const localPath = `/static/images/projects/project-${ghProject.repoName}.png`
+      const localPath = `/static/images/projects/project-${ghProject.repoName.toLowerCase()}.png`
       if (fs.existsSync(path.join(process.cwd(), 'public', localPath))) {
         project.imgSrc = localPath
       }
