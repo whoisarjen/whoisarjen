@@ -1,3 +1,5 @@
+import fs from 'fs'
+import path from 'path'
 import { getGitHubProjects, type GitHubProject } from '@/lib/github'
 
 export type Project = {
@@ -108,10 +110,22 @@ export async function getProjects(): Promise<Project[]> {
 
   const projects: Project[] = githubProjects.map((ghProject: GitHubProject) => {
     const override = overrides[ghProject.title]
-    return {
+    const project = {
       ...ghProject,
       ...override,
     }
+
+    // Prefer local static screenshots over Microlink API URLs.
+    // If no imgSrc override was set, check if a local file exists at the
+    // conventional path: /static/images/projects/project-<repoName>.png
+    if (!override?.imgSrc) {
+      const localPath = `/static/images/projects/project-${ghProject.repoName}.png`
+      if (fs.existsSync(path.join(process.cwd(), 'public', localPath))) {
+        project.imgSrc = localPath
+      }
+    }
+
+    return project
   })
 
   // Sort GitHub projects by displayOrder, then the rest alphabetically

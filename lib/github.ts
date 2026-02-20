@@ -7,6 +7,7 @@ export type GitHubProject = {
   href: string
   imgSrc: string
   repoUrl: string
+  repoName: string
   topics: string[]
 }
 
@@ -47,6 +48,7 @@ export async function getGitHubProjects(): Promise<GitHubProject[]> {
           ? getScreenshotUrl(repo.homepage!)
           : `/api/og?title=${encodeURIComponent(title)}&description=${encodeURIComponent(description)}`,
         repoUrl: repo.html_url,
+        repoName: repo.name,
         topics: repo.topics || [],
       }
     })
