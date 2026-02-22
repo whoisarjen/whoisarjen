@@ -9,19 +9,15 @@ export type Project = {
   imgSrc: string
   repoUrl?: string
   topics?: string[]
+  highlighted?: boolean
 }
 
-// Display order for GitHub projects. Projects not listed here appear after these.
-const displayOrder: string[] = [
-  'Mypress',
-  'Vigil',
-  'Riftlens',
-  'Investo',
-  'Ratio',
-  'Parallax',
+// Highlighted projects shown first, in this exact order.
+// Remaining projects follow sorted freshest-to-oldest (GitHub API updated order).
+const highlightedProjects: string[] = [
   'Juicify Open Source',
   'Digital Nomad',
-  'Titanizo',
+  'Ratio',
 ]
 
 // Overrides keyed by formatted repo name (after formatRepoName in lib/github.ts).
@@ -133,18 +129,28 @@ export async function getProjects(): Promise<Project[]> {
     return project
   })
 
-  // Sort GitHub projects by displayOrder, then the rest alphabetically
-  projects.sort((a, b) => {
-    const aIdx = displayOrder.indexOf(a.title)
-    const bIdx = displayOrder.indexOf(b.title)
-    // Check against original title too (before override renames)
-    const aOrigIdx = aIdx === -1 ? displayOrder.findIndex((name) => overrides[name]?.title === a.title) : aIdx
-    const bOrigIdx = bIdx === -1 ? displayOrder.findIndex((name) => overrides[name]?.title === b.title) : bIdx
-    const aOrder = aOrigIdx !== -1 ? aOrigIdx : displayOrder.length
-    const bOrder = bOrigIdx !== -1 ? bOrigIdx : displayOrder.length
-    if (aOrder !== bOrder) return aOrder - bOrder
-    return a.title.localeCompare(b.title)
-  })
+  // Mark highlighted projects
+  for (const project of projects) {
+    const hlIdx = highlightedProjects.indexOf(project.title)
+    const hlOrigIdx =
+      hlIdx === -1
+        ? highlightedProjects.findIndex((name) => overrides[name]?.title === project.title)
+        : hlIdx
+    if (hlOrigIdx !== -1) {
+      project.highlighted = true
+    }
+  }
 
-  return [...projects, ...extraProjects]
+  // Sort: highlighted first (in specified order), then rest in API order (freshest to oldest)
+  const highlighted: Project[] = []
+  for (const name of highlightedProjects) {
+    const override = overrides[name]
+    const match = projects.find(
+      (p) => p.title === name || (override?.title && p.title === override.title)
+    )
+    if (match) highlighted.push(match)
+  }
+  const rest = projects.filter((p) => !p.highlighted)
+
+  return [...highlighted, ...rest, ...extraProjects]
 }
