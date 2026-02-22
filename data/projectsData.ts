@@ -15,6 +15,9 @@ export type Project = {
 // Highlighted projects shown first, in this exact order.
 // Remaining projects follow sorted freshest-to-oldest (GitHub API updated order).
 const highlightedProjects: string[] = [
+  'Comscore',
+  'Deante',
+  'Deante Design Studio',
   'Juicify Open Source',
   'Digital Nomad',
   'Ratio',
@@ -129,8 +132,11 @@ export async function getProjects(): Promise<Project[]> {
     return project
   })
 
+  // Combine all projects for highlight lookup
+  const allProjects = [...projects, ...extraProjects]
+
   // Mark highlighted projects
-  for (const project of projects) {
+  for (const project of allProjects) {
     const hlIdx = highlightedProjects.indexOf(project.title)
     const hlOrigIdx =
       hlIdx === -1
@@ -141,16 +147,17 @@ export async function getProjects(): Promise<Project[]> {
     }
   }
 
-  // Sort: highlighted first (in specified order), then rest in API order (freshest to oldest)
+  // Sort: highlighted first (in specified order), then rest in API order (freshest to oldest), then extra
   const highlighted: Project[] = []
   for (const name of highlightedProjects) {
     const override = overrides[name]
-    const match = projects.find(
+    const match = allProjects.find(
       (p) => p.title === name || (override?.title && p.title === override.title)
     )
     if (match) highlighted.push(match)
   }
-  const rest = projects.filter((p) => !p.highlighted)
+  const restGithub = projects.filter((p) => !p.highlighted)
+  const restExtra = extraProjects.filter((p) => !p.highlighted)
 
-  return [...highlighted, ...rest, ...extraProjects]
+  return [...highlighted, ...restGithub, ...restExtra]
 }
