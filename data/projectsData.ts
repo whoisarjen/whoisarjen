@@ -14,6 +14,8 @@ export type Project = {
 // Display order for GitHub projects. Projects not listed here appear after these.
 const displayOrder: string[] = [
   'Mypress',
+  'Vigil',
+  'Riftlens',
   'Investo',
   'Ratio',
   'Parallax',
@@ -37,6 +39,9 @@ const overrides: Record<string, Partial<Project>> = {
   'Juicify Open Source': {
     title: 'Juicify',
     imgSrc: '/static/images/projects/project-juicify.png',
+  },
+  Riftlens: {
+    title: 'RiftLens',
   },
   Parallax: {
     href: 'https://parallax.whoisarjen.com',

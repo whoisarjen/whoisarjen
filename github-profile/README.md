@@ -30,6 +30,8 @@ I'm a full-stack engineer who ships products and obsesses over performance. I bu
 |---------|-------------|--------|
 | [**Deante**](https://deante.pl) | Multi-market e-commerce platform (11 languages, full-text search, Redis caching) | `Active` |
 | [**Juicify**](https://juicify.whoisarjen.com) | AI-powered fitness & nutrition platform | `Active` |
+| [**Vigil**](https://vigil.whoisarjen.com) | Open source status page & cron monitoring | `Active` |
+| [**RiftLens**](https://riftlens.whoisarjen.com) | Open source League of Legends analytics platform | `Active` |
 | [**Digital Nomad**](https://nomad.whoisarjen.com) | Remote work destination finder for digital nomads | `Active` |
 | [**whoisarjen.com**](https://whoisarjen.com) | Technical blog — 25+ deep-dive articles on performance & architecture | `Active` |
 
