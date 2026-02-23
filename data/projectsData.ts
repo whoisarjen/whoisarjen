@@ -32,20 +32,28 @@ const overrides: Record<string, Partial<Project>> = {
     imgSrc: '/static/images/projects/project-mypress.png',
   },
   Investo: {
+    title: 'Investo',
     href: 'https://investo.whoisarjen.com',
     imgSrc: '/static/images/projects/project-investo.png',
   },
   'Juicify Open Source': {
     title: 'Juicify',
+    href: 'https://juicify.whoisarjen.com',
     imgSrc: '/static/images/projects/project-juicify.png',
   },
   Riftlens: {
     title: 'RiftLens',
+    href: 'https://riftlens.whoisarjen.com',
+    imgSrc: '/static/images/projects/project-riftlens.png',
   },
   Parallax: {
+    title: 'Parallax',
     href: 'https://parallax.whoisarjen.com',
+    imgSrc: '/static/images/projects/project-parallax.png',
   },
   Logify: {
+    title: 'Logify',
+    href: 'https://logify.whoisarjen.com',
     imgSrc: '/static/images/projects/project-logify.png',
   },
 }
