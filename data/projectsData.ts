@@ -20,6 +20,7 @@ const highlightedProjects: string[] = [
   'Deante Design Studio',
   'Juicify Open Source',
   'Digital Nomad',
+  'Logify',
   'Ratio',
 ]
 
