@@ -45,6 +45,9 @@ const overrides: Record<string, Partial<Project>> = {
   Parallax: {
     href: 'https://parallax.whoisarjen.com',
   },
+  Logify: {
+    imgSrc: '/static/images/projects/project-logify.png',
+  },
 }
 
 // Extra projects that are NOT on GitHub.
