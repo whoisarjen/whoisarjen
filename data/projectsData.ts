@@ -57,6 +57,11 @@ const overrides: Record<string, Partial<Project>> = {
     href: 'https://logify.whoisarjen.com',
     imgSrc: '/static/images/projects/project-logify.png',
   },
+  Beamback: {
+    title: 'Beamback',
+    href: 'https://beamback.whoisarjen.com',
+    imgSrc: '/static/images/projects/project-beamback.png',
+  },
 }
 
 // Extra projects that are NOT on GitHub.

@@ -40,6 +40,7 @@ I'm a full-stack engineer who ships products and obsesses over performance. I bu
 | [**Parallax**](https://parallax.whoisarjen.com) | Next-gen estimation engine for Jira — multi-perspective complexity analysis | `Active` |
 | [**MyPress**](https://mypress.whoisarjen.com) | Open source self-publishing platform — publish & sell books with 2% fee | `Active` |
 | [**Investo**](https://investo.whoisarjen.com) | Open source ETF investment tracker — track your portfolio locally | `Active` |
+| [**Beamback**](https://beamback.whoisarjen.com) | Open-source feedback collection — one script tag gives you a widget, voting board, and roadmap | `Active` |
 | [**Titanizo**](https://titanizo.whoisarjen.com) | Modern full-stack blogging platform built with Nuxt 4 and PostgreSQL | `Active` |
 | [**whoisarjen.com**](https://whoisarjen.com) | Technical blog — deep-dive articles on performance & architecture | `Active` |
 
