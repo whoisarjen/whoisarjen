@@ -3,6 +3,7 @@ import { allBlogs } from 'contentlayer/generated'
 import Main from './Main'
 import { getProjects } from '@/data/projectsData'
 import siteMetadata from '@/data/siteMetadata'
+import { BeambackWidget } from '@/components/BeambackWidget'
 
 export const revalidate = 86400 // 1 day
 
@@ -10,5 +11,10 @@ export default async function Page() {
   const sortedPosts = sortPosts(allBlogs)
   const posts = allCoreContent(sortedPosts).slice(0, siteMetadata.postsPerPage)
   const projects = await getProjects()
-  return <Main posts={posts} projects={projects} />
+  return (
+    <>
+      <Main posts={posts} projects={projects} />
+      <BeambackWidget />
+    </>
+  )
 }
