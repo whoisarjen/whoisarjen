@@ -1,6 +1,6 @@
-"use client";
+'use client'
 
-import Script from "next/script";
+import Script from 'next/script'
 
 export function BeambackWidget() {
   return (
@@ -9,5 +9,5 @@ export function BeambackWidget() {
       data-api-key="ak_FOGvNVCYJonr64qXksEN6"
       strategy="afterInteractive"
     />
-  );
+  )
 }
