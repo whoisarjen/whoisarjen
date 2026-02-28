@@ -70,6 +70,14 @@ const overrides: Record<string, Partial<Project>> = {
     imgSrc: '/static/images/projects/project-beamback.png',
     techStack: ['Next.js', 'TypeScript'],
   },
+  Splito: {
+    title: 'Splito',
+    description:
+      'Open-source expense sharing app. Split bills with friends, track group expenses, and settle up in any currency.',
+    href: 'https://splito.whoisarjen.com',
+    imgSrc: '/static/images/projects/project-splito.png',
+    techStack: ['Nuxt 4', 'TypeScript', 'PostgreSQL', 'Prisma'],
+  },
   Callout: {
     title: 'Callout',
     description:
