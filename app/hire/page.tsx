@@ -83,8 +83,8 @@ export default function HirePage() {
           </h1>
 
           <p className="mt-6 max-w-2xl text-lg leading-relaxed text-gray-400">
-            I'm a Senior Full-Stack Engineer looking for my next challenge. I bring deep expertise in
-            performance optimization, scalable architecture, and shipping production systems.
+            I'm a Senior Full-Stack Engineer looking for my next challenge. I bring deep expertise
+            in performance optimization, scalable architecture, and shipping production systems.
           </p>
 
           {/* CTA row */}

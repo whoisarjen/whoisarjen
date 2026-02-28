@@ -62,9 +62,9 @@ export default function Home({ posts, projects }) {
           </h1>
 
           <p className="mt-6 max-w-2xl text-lg leading-relaxed text-gray-400">
-            Senior Full-Stack Engineer specializing in multi-market e-commerce,
-            performance optimization, and scalable architecture. Proven track
-            record shipping high-traffic platforms across international markets.
+            Senior Full-Stack Engineer specializing in multi-market e-commerce, performance
+            optimization, and scalable architecture. Proven track record shipping high-traffic
+            platforms across international markets.
           </p>
 
           {/* CTA row */}
@@ -249,10 +249,7 @@ export default function Home({ posts, projects }) {
               <article key={slug} className="group py-6 first:pt-0 last:pb-0">
                 <Link href={`/blog/${slug}`} className="block">
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:gap-6">
-                    <time
-                      dateTime={date}
-                      className="shrink-0 text-sm tabular-nums text-gray-400"
-                    >
+                    <time dateTime={date} className="shrink-0 text-sm tabular-nums text-gray-400">
                       {formatDate(date, siteMetadata.locale)}
                     </time>
                     <div className="min-w-0 flex-1">
@@ -282,10 +279,7 @@ export default function Home({ posts, projects }) {
         </div>
 
         <div className="mt-6 sm:hidden">
-          <Link
-            href="/blog"
-            className="text-sm font-semibold text-sky-500 hover:text-sky-400"
-          >
+          <Link href="/blog" className="text-sm font-semibold text-sky-500 hover:text-sky-400">
             All posts &rarr;
           </Link>
         </div>
@@ -332,7 +326,6 @@ export default function Home({ posts, projects }) {
             </Link>
           </div>
         </div>
-
       </section>
     </div>
   )

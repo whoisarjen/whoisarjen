@@ -27,7 +27,7 @@ export default function PostMinimal({ content, next, prev, children }: LayoutPro
       <ScrollTopAndComment />
       <article>
         <div>
-          <div className="space-y-1 pb-10 text-center border-gray-700">
+          <div className="space-y-1 border-gray-700 pb-10 text-center">
             <div className="w-full">
               <Bleed>
                 <div className="relative aspect-[2/1] w-full">
