@@ -1,12 +1,12 @@
 import Image from './Image'
 import Link from './Link'
 
-const Card = ({ title, description, imgSrc, href, status = null }) => (
+const Card = ({ title, description, imgSrc, href, status = null, techStack = [] as string[] }) => (
   <div className="md max-w-[544px] p-4 md:w-1/2">
     <div
       className={`${
         imgSrc && 'h-full'
-      }  flex flex-col overflow-hidden rounded-md border-2 border-gray-200 border-opacity-60 dark:border-gray-700`}
+      }  flex flex-col overflow-hidden rounded-md border-2 border-gray-800 border-opacity-60`}
     >
       {imgSrc &&
         (href ? (
@@ -30,7 +30,7 @@ const Card = ({ title, description, imgSrc, href, status = null }) => (
         ))}
       <div className="flex flex-1 flex-col p-6">
         <div className="flex flex-1 flex-col justify-between">
-          <h2 className="mb-3 text-2xl font-bold leading-8 tracking-tight">
+          <h2 className="mb-3 text-2xl font-bold leading-8 tracking-tight text-white">
             {href ? (
               <Link href={href} aria-label={`Link to ${title}`} rel="nofollow">
                 {title}
@@ -39,13 +39,25 @@ const Card = ({ title, description, imgSrc, href, status = null }) => (
               title
             )}
           </h2>
-          <p className="prose mb-3 max-w-none text-gray-500 dark:text-gray-400">{description}</p>
+          <p className="prose mb-3 max-w-none text-gray-400">{description}</p>
         </div>
+        {techStack && techStack.length > 0 && (
+          <div className="mb-3 flex flex-wrap gap-1.5">
+            {techStack.map((tech) => (
+              <span
+                key={tech}
+                className="rounded-full bg-gray-800 px-2.5 py-0.5 text-xs text-gray-400"
+              >
+                {tech}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="flex flex-1 items-end justify-between">
           {href && (
             <Link
               href={href}
-              className="text-base font-medium leading-6 text-primary-500 hover:text-primary-600 dark:hover:text-primary-400"
+              className="text-base font-medium leading-6 text-sky-500 hover:text-sky-400"
               aria-label={`Link to ${title}`}
             >
               Learn more &rarr;

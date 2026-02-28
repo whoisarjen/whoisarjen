@@ -10,6 +10,7 @@ export type Project = {
   repoUrl?: string
   topics?: string[]
   highlighted?: boolean
+  techStack?: string[]
 }
 
 // Highlighted projects shown first, in this exact order.
@@ -31,41 +32,51 @@ const overrides: Record<string, Partial<Project>> = {
     title: 'MyPress',
     href: 'https://mypress.whoisarjen.com',
     imgSrc: '/static/images/projects/project-mypress.png',
+    techStack: ['Nuxt 3', 'TypeScript', 'PostgreSQL'],
   },
   Investo: {
     title: 'Investo',
     href: 'https://investo.whoisarjen.com',
     imgSrc: '/static/images/projects/project-investo.png',
+    techStack: ['Next.js', 'TypeScript'],
   },
   'Juicify Open Source': {
     title: 'Juicify',
     href: 'https://juicify.whoisarjen.com',
     imgSrc: '/static/images/projects/project-juicify.png',
+    techStack: ['React', 'Next.js', 'TypeScript', 'Prisma'],
   },
   Riftlens: {
     title: 'RiftLens',
     href: 'https://riftlens.whoisarjen.com',
     imgSrc: '/static/images/projects/project-riftlens.png',
+    techStack: ['Next.js', 'TypeScript'],
   },
   Parallax: {
     title: 'Parallax',
     href: 'https://parallax.whoisarjen.com',
     imgSrc: '/static/images/projects/project-parallax.png',
+    techStack: ['Next.js', 'TypeScript'],
   },
   Logify: {
     title: 'Logify',
     href: 'https://logify.whoisarjen.com',
     imgSrc: '/static/images/projects/project-logify.png',
+    techStack: ['Next.js', 'TypeScript', 'PostgreSQL'],
   },
   Beamback: {
     title: 'Beamback',
     href: 'https://beamback.whoisarjen.com',
     imgSrc: '/static/images/projects/project-beamback.png',
+    techStack: ['Next.js', 'TypeScript'],
   },
   Callout: {
     title: 'Callout',
+    description:
+      'Open-source call-to-action component library. Drop-in banners, modals, and notification bars for any website.',
     href: 'https://callout.whoisarjen.com',
     imgSrc: '/static/images/projects/project-callout.png',
+    techStack: ['Next.js', 'TypeScript'],
   },
 }
 
@@ -79,6 +90,7 @@ const extraProjects: Project[] = [
       'A collaborative project developed with Deante, a leading Polish manufacturer of kitchen and bathroom fittings.',
     imgSrc: '/static/images/projects/project-deante.png',
     href: 'https://deante.pl',
+    techStack: ['Vue', 'Nuxt 3', 'PostgreSQL', 'Redis', 'TypeScript'],
   },
   {
     title: 'Deante Design Studio',
@@ -86,6 +98,7 @@ const extraProjects: Project[] = [
       'A platform for architects and designers featuring 3D models, bathroom and kitchen collections, and design resources from Deante.',
     imgSrc: '/static/images/projects/project-deante-design-studio.png',
     href: 'https://deantedesign.studio',
+    techStack: ['Vue', 'Nuxt 3', 'TypeScript'],
   },
   {
     title: 'Comscore',
@@ -93,6 +106,7 @@ const extraProjects: Project[] = [
       'A trusted media measurement platform providing cross-platform audience analytics and advertising evaluation services.',
     imgSrc: '/static/images/projects/project-comscore.png',
     href: 'https://www.comscore.com',
+    techStack: ['React', 'TypeScript'],
   },
   {
     title: 'Arjenworld',
@@ -100,6 +114,7 @@ const extraProjects: Project[] = [
       'My blog documenting my life journey and being my SEO strategies experiment place, which was successfully sold.',
     imgSrc: '/static/images/projects/project-arjenworld.png',
     href: 'https://arjenworld.pl',
+    techStack: ['WordPress', 'SEO'],
   },
   {
     title: 'Game Boosting Service',

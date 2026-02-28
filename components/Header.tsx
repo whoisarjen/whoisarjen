@@ -1,7 +1,6 @@
 import headerNavLinks from '@/data/headerNavLinks'
 import Link from './Link'
 import MobileNav from './MobileNav'
-import ThemeSwitch from './ThemeSwitch'
 import SearchButton from './SearchButton'
 import Image from '@/components/Image'
 import siteMetadata from '@/data/siteMetadata'
@@ -32,13 +31,12 @@ const Header = () => {
             <Link
               key={link.title}
               href={link.href}
-              className="hidden font-medium text-gray-900 dark:text-gray-100 sm:block"
+              className="hidden font-medium text-gray-100 sm:block"
             >
               {link.title}
             </Link>
           ))}
         <SearchButton />
-        <ThemeSwitch />
         <MobileNav />
       </div>
     </header>
