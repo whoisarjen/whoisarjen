@@ -62,6 +62,11 @@ const overrides: Record<string, Partial<Project>> = {
     href: 'https://beamback.whoisarjen.com',
     imgSrc: '/static/images/projects/project-beamback.png',
   },
+  Callout: {
+    title: 'Callout',
+    href: 'https://callout.whoisarjen.com',
+    imgSrc: '/static/images/projects/project-callout.png',
+  },
 }
 
 // Extra projects that are NOT on GitHub.
