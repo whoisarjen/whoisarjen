@@ -75,7 +75,5 @@ export function getScreenshotUrl(url: string): string {
 }
 
 function formatRepoName(name: string): string {
-  return name
-    .replace(/-/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase())
+  return name.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }

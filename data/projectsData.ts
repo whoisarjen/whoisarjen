@@ -140,7 +140,7 @@ const extraProjects: Project[] = [
   {
     title: 'Virtual Private Network',
     description:
-      'A secure and user-friendly VPN service platform designed to protect users\' online privacy and enhance their internet experience.',
+      "A secure and user-friendly VPN service platform designed to protect users' online privacy and enhance their internet experience.",
     imgSrc: '/static/images/projects/project-vpn.png',
     href: '/static/images/projects/project-vpn.png',
   },
