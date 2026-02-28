@@ -10,7 +10,7 @@ export type Project = {
   repoUrl?: string
   topics?: string[]
   highlighted?: boolean
-  techStack?: string[]
+  techStack: string[]
 }
 
 // Highlighted projects shown first, in this exact order.
@@ -130,6 +130,7 @@ const extraProjects: Project[] = [
       'A professional game boosting service platform designed to help gamers enhance their gaming experience and achieve their in-game goals.',
     imgSrc: '/static/images/projects/project-boosteria.jpg',
     href: '/static/images/projects/project-boosteria.jpg',
+    techStack: ['WordPress', 'PHP'],
   },
   {
     title: 'Personal Trainer',
@@ -137,6 +138,7 @@ const extraProjects: Project[] = [
       'A dynamic and user-centric personal trainer platform designed to help clients achieve their fitness goals.',
     imgSrc: '/static/images/projects/project-personal-trainer.jpg',
     href: '/static/images/projects/project-personal-trainer.jpg',
+    techStack: ['WordPress', 'PHP'],
   },
   {
     title: 'Football Club News',
@@ -144,6 +146,7 @@ const extraProjects: Project[] = [
       'A comprehensive football club news platform designed to keep fans informed and engaged.',
     imgSrc: '/static/images/projects/project-liverpool.png',
     href: '/static/images/projects/project-liverpool.png',
+    techStack: ['WordPress', 'PHP'],
   },
   {
     title: 'Virtual Private Network',
@@ -151,8 +154,50 @@ const extraProjects: Project[] = [
       "A secure and user-friendly VPN service platform designed to protect users' online privacy and enhance their internet experience.",
     imgSrc: '/static/images/projects/project-vpn.png',
     href: '/static/images/projects/project-vpn.png',
+    techStack: ['WordPress', 'PHP'],
   },
 ]
+
+const topicMap: Record<string, string> = {
+  typescript: 'TypeScript',
+  javascript: 'JavaScript',
+  react: 'React',
+  nextjs: 'Next.js',
+  nuxt: 'Nuxt',
+  nuxtjs: 'Nuxt',
+  vue: 'Vue',
+  vuejs: 'Vue',
+  nodejs: 'Node.js',
+  postgresql: 'PostgreSQL',
+  postgres: 'PostgreSQL',
+  redis: 'Redis',
+  prisma: 'Prisma',
+  tailwindcss: 'Tailwind CSS',
+  tailwind: 'Tailwind CSS',
+  docker: 'Docker',
+  graphql: 'GraphQL',
+  python: 'Python',
+  go: 'Go',
+  rust: 'Rust',
+  mongodb: 'MongoDB',
+  mysql: 'MySQL',
+  sqlite: 'SQLite',
+  php: 'PHP',
+  wordpress: 'WordPress',
+}
+
+function topicsToTechStack(topics: string[]): string[] {
+  const seen = new Set<string>()
+  const stack: string[] = []
+  for (const topic of topics) {
+    const label = topicMap[topic.toLowerCase()]
+    if (label && !seen.has(label)) {
+      seen.add(label)
+      stack.push(label)
+    }
+  }
+  return stack
+}
 
 export async function getProjects(): Promise<Project[]> {
   const githubProjects = await getGitHubProjects()
@@ -161,6 +206,7 @@ export async function getProjects(): Promise<Project[]> {
     const override = overrides[ghProject.title]
     const project = {
       ...ghProject,
+      techStack: override?.techStack ?? topicsToTechStack(ghProject.topics),
       ...override,
     }
 
