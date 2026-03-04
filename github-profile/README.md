@@ -14,7 +14,7 @@
 
 ### About Me
 
-I'm a full-stack engineer who ships products and obsesses over performance. I build multi-market e-commerce platforms serving users across **11 languages**, optimize systems down to the byte level, and write about what I learn along the way.
+I'm a full-stack engineer who ships products and obsesses over performance. I build multi-market e-commerce platforms serving users across **13 languages**, optimize systems down to the byte level, and write about what I learn along the way.
 
 - Architecting high-traffic e-commerce platforms with **Vue/Nuxt 3**, **Next.js**, **PostgreSQL**, and **Redis**
 - Cut API response sizes by **60%**, achieved **6x cache capacity** on 1GB servers, and delivered **80% faster search**
@@ -29,7 +29,7 @@ I'm a full-stack engineer who ships products and obsesses over performance. I bu
 | Project | Description | Status |
 |---------|-------------|--------|
 | [**Comscore**](https://www.comscore.com) | Cross-platform audience analytics and advertising evaluation services | `Active` |
-| [**Deante**](https://deante.pl) | Multi-market e-commerce platform (11 languages, full-text search, Redis caching) | `Active` |
+| [**Deante**](https://deante.pl) | Multi-market e-commerce platform (13 languages, full-text search, Redis caching) | `Active` |
 | [**Deante Design Studio**](https://deantedesign.studio) | 3D models, bathroom & kitchen collections, and design resources for architects | `Active` |
 | [**Juicify**](https://juicify.whoisarjen.com) | AI-powered fitness & nutrition platform | `Active` |
 | [**Digital Nomad**](https://nomad.whoisarjen.com) | Compare 500+ cities for digital nomads and remote workers | `Active` |

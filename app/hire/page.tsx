@@ -35,7 +35,7 @@ const metrics = [
   { value: '-60%', label: 'API response size' },
   { value: '6x', label: 'Cache capacity' },
   { value: '+80%', label: 'Faster search' },
-  { value: '11', label: 'Languages served' },
+  { value: '13', label: 'Languages served' },
   { value: '15+', label: 'Projects shipped' },
   { value: '26', label: 'Technical articles' },
 ]

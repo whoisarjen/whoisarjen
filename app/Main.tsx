@@ -10,7 +10,7 @@ const metrics = [
   { value: '-60%', label: 'API response size', detail: 'Smart object mapping' },
   { value: '6x', label: 'Cache capacity', detail: 'gzip on 1GB servers' },
   { value: '+80%', label: 'Faster search', detail: 'PostgreSQL CTE tuning' },
-  { value: '11', label: 'Languages served', detail: 'Multi-market e-commerce' },
+  { value: '13', label: 'Languages served', detail: 'Multi-market e-commerce' },
 ]
 
 const techStack = [
