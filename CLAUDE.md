@@ -26,3 +26,67 @@ When adding or updating projects, always do the following before pushing:
 - `lib/github.ts` — GitHub API fetch + Microlink screenshot URL generation
 - `github-profile/README.md` — GitHub profile README (the one shown on github.com/whoisarjen)
 - `public/static/images/projects/` — static project screenshot images
+
+## Blog Posts
+
+Blog posts are MDX files in `data/blog/`. Framework: Next.js 14 + Contentlayer2. Deployed via `git push origin main` (Vercel auto-deploys).
+
+### CRITICAL — MDX Pitfalls
+
+**1. YAML Apostrophes in Single Quotes (SILENT FAILURE)**
+Contentlayer silently skips files with YAML parse errors — no build failure, post just disappears.
+```yaml
+# WRONG — apostrophe breaks single-quoted YAML string
+title: 'Why Your Server Shouldn't Touch the Bytes'
+
+# CORRECT — use double quotes when text has apostrophes
+title: "Why Your Server Shouldn't Touch the Bytes"
+```
+
+**2. Angle Brackets Outside Code Blocks**
+MDX parses `<` as JSX tag start → build error. `>` can also cause issues.
+```markdown
+# WRONG — MDX treats <1KB as a JSX tag
+- Responses are tiny (<1KB)
+- Responses are large (>10KB)
+
+# CORRECT — use words instead
+- Responses are tiny (under 1KB)
+- Responses are large (over 10KB)
+```
+Angle brackets inside code blocks (```) and inline code (`) are fine.
+
+**3. Curly Braces Outside Code Blocks**
+`{` and `}` are JSX expression delimiters in MDX — escape or put inside code blocks.
+
+**4. Date Must Not Be In The Future (UTC)**
+Posts with future dates may not appear on the blog listing. Use yesterday or today in UTC.
+
+### Frontmatter Format
+```yaml
+---
+title: "Title Here (use double quotes if apostrophes present)"
+date: 2026-03-11T12:00:00Z
+lastmod: '2026-03-11'              # Optional
+summary: 'One sentence summary of the post'
+tags: ['Tag1', 'Tag2', 'Tag3']     # 5-7 tags
+---
+```
+
+### Writing Style
+- **Tone**: First-person technical narrative ("We ran this pattern", "I chose optimization")
+- **Structure**: Problem → Root cause → Solution → Implementation → Results/Impact
+- **Length**: 2,000-4,000 words
+- **Language**: English only
+- **No emojis** in body text
+- **No images** — pure text, tables, code blocks
+- **Headings**: `##` for main sections, `###` for subsections, never `#` (title is in frontmatter)
+- **Code**: TypeScript/JavaScript with ```typescript, real patterns not pseudocode
+- **Tables**: For comparisons and before/after metrics
+- **End**: With a memorable one-liner conclusion
+
+### Before Pushing Blog Posts
+1. Check for apostrophes in single-quoted YAML values → switch to double quotes
+2. Check for `<` `>` `{` `}` outside code blocks → use words or code blocks
+3. Ensure date is not in the future (UTC)
+4. Push and verify the Vercel build succeeds and the post appears on /blog
