@@ -288,7 +288,7 @@ This pattern shines when:
 
 It's less useful when:
 
-- **Responses are tiny** (<1KB) — the redirect overhead exceeds the proxy cost
+- **Responses are tiny** (under 1KB) — the redirect overhead exceeds the proxy cost
 - **Every response is unique** — no caching opportunity, always a cold miss
 - **Clients can't follow redirects** — embedded devices, very old HTTP stacks
 - **You need response transformation** — if the server modifies responses per-client, it needs to see the bytes
