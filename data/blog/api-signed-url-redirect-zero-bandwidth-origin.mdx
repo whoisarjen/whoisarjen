@@ -1,0 +1,312 @@
+---
+title: 'Zero Bandwidth on Origin: Serving API Responses via Signed URL Redirects'
+date: 2026-03-12T12:00:00Z
+summary: 'How replacing API response proxying with 307 redirects to signed CDN URLs eliminated origin bandwidth costs and removed an entire class of streaming bugs.'
+tags: ['CDN', 'Performance', 'Architecture', 'API Design', 'Node.js', 'Caching', 'Security']
+---
+
+## The Proxy Problem
+
+If your API serves large responses — product catalogs, data feeds, export files — you've probably built something like this:
+
+```
+Client → API Server (auth + fetch from storage) → stream response back
+```
+
+The API server authenticates the request, fetches the data from storage or CDN, and proxies every byte back to the client. It works, but it has problems that get worse as traffic grows.
+
+We ran this pattern for our B2B data feeds. Clients would request product catalogs (500KB-2MB JSON/XML files), and our server would fetch the file from CDN storage, then stream it back. Three issues kept appearing:
+
+**Content-Encoding mismatch.** When your server fetches from a CDN, many HTTP clients automatically decompress gzip responses. But the original `Content-Length` header still reflects the compressed size. The client receives 800KB of data but the header says 300KB — some HTTP clients truncate the response at 300KB.
+
+**Stream truncation.** If the CDN drops the connection mid-stream, your server has already sent HTTP 200 with headers. The client receives a partial response with a success status code. There's no way to signal the error after headers are sent.
+
+**Unnecessary compute.** Your server is spending CPU cycles and bandwidth just to relay bytes between two other systems. On serverless platforms, you're paying for every millisecond of that relay.
+
+## The Pattern: Redirect Instead of Proxy
+
+The fix is architecturally simple: **don't proxy the bytes at all**. Instead, generate a signed URL that grants temporary access to the file on CDN, and redirect the client there.
+
+```
+Client → API Server (auth + generate signed URL) → 307 Redirect
+Client → CDN Edge (direct download) ✓
+```
+
+Your server handles authentication, rate limiting, and access control — then gets out of the way. The CDN handles content delivery, compression, and global edge distribution.
+
+This isn't a novel idea. It's the dominant pattern at scale.
+
+## Who Uses This Pattern
+
+### Netflix — Open Connect
+
+Netflix built an entire CDN (Open Connect) around this concept. Their API servers handle the control plane — authentication, content selection, bitrate decisions — then steer clients to the nearest Open Connect Appliance for actual video delivery. The API never touches video bytes. According to Netflix's engineering team, 95% of their global traffic is served via direct connections between their edge appliances and ISP networks.
+
+### Spotify — Control Plane / Data Plane Separation
+
+Spotify's architecture explicitly separates the control plane from the data plane. Stateless API servers handle JWT authentication and generate signed URLs. Clients then stream audio directly from the nearest CDN edge node. Their engineering blog describes this separation as key to handling billions of streams without API servers becoming a bottleneck.
+
+### Docker Registry — 307 by Specification
+
+The Docker Registry HTTP API V2 uses 307 redirects by specification. When you `docker pull` an image, blob download requests return 307 redirects to storage backends (S3, Azure Blob Storage) rather than serving content through the registry. All Docker clients are required to support redirects for blob requests. This is one of the clearest examples of the pattern codified as an API standard.
+
+### GitHub — Presigned S3 URLs
+
+GitHub uses the same approach for file downloads. Asset URLs return redirects to AWS S3 presigned URLs with embedded authentication parameters. GitHub's servers never proxy file bytes.
+
+### AWS S3 — The Canonical Pattern
+
+AWS documents this as a canonical architecture: a Lambda function generates a presigned URL and responds with a redirect. The client downloads directly from S3. AWS describes it as: "The file goes directly from the browser to S3 — your API only generates the permission slip."
+
+## How Signed URLs Work
+
+A signed URL is a regular URL with cryptographic parameters that prove the server authorized access. The CDN validates the signature before serving the file.
+
+The signature is typically computed like this:
+
+```typescript
+import { createHash } from 'node:crypto';
+
+function generateSignedUrl(path: string, expirationSeconds = 60): string {
+    const securityKey = process.env.CDN_SECURITY_KEY;
+    const hostname = process.env.CDN_HOSTNAME;
+
+    const cleanPath = path.startsWith('/') ? path : `/${path}`;
+    const expires = Math.floor(Date.now() / 1000) + expirationSeconds;
+
+    const token = createHash('sha256')
+        .update(securityKey + cleanPath + expires)
+        .digest('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=/g, '');
+
+    return `https://${hostname}${cleanPath}?token=${token}&expires=${expires}`;
+}
+```
+
+The CDN receives the request, recomputes the hash using its copy of the security key, and compares. If the hash matches and the expiration hasn't passed, it serves the file. Otherwise, it returns 403.
+
+Key properties:
+
+- **Time-limited**: URLs expire after a set period (typically 30-300 seconds)
+- **Path-specific**: The signature is bound to a specific file path
+- **Tamper-proof**: Changing any parameter invalidates the signature
+- **Stateless**: The CDN doesn't need to call back to your server to validate
+
+Most CDN providers support this: AWS CloudFront uses RSA key pairs, Google Cloud CDN uses HMAC-SHA1, Azure CDN uses HMAC-based token authentication, and Akamai offers their Auth Token 2.0 system.
+
+## Why 307 (Not 302)
+
+HTTP has several redirect status codes. For API redirects, **307 Temporary Redirect** is the correct choice:
+
+| Code | Method Preserved | Use Case |
+|------|-----------------|----------|
+| 301 | No guarantee | Permanent URL changes |
+| 302 | No guarantee | Legacy, ambiguous behavior |
+| 307 | Yes, strictly | Temporary redirect, method preserved |
+| 308 | Yes, strictly | Permanent redirect, method preserved |
+
+The critical difference: 302 technically allows clients to change the HTTP method (some old clients change POST to GET). 307 strictly preserves the method. For GET-only endpoints both work identically, but 307 is semantically correct and avoids edge cases with non-standard client implementations.
+
+All modern HTTP libraries follow 307 redirects by default — including cURL (via libraries like Guzzle), Python's `requests`, Node.js `fetch`/`axios`, Java's `HttpURLConnection`, and .NET's `HttpClient`.
+
+## Implementation
+
+Here's the complete pattern for an API endpoint that authenticates, checks cache, and redirects:
+
+```typescript
+export default defineEventHandler(async (event) => {
+    // 1. Authenticate the request
+    const apiKey = getQuery(event).key;
+    const client = await validateApiKey(apiKey);
+
+    if (!client) {
+        throw createError({ statusCode: 403, message: 'Invalid API key' });
+    }
+
+    // 2. Rate limiting
+    if (client.requestCount >= client.hourlyLimit) {
+        throw createError({ statusCode: 429, message: 'Rate limit exceeded' });
+    }
+
+    // 3. Determine the file path on CDN
+    const filePath = buildFilePath(client, event);
+
+    // 4. Check if a fresh version exists on CDN
+    const signedUrl = generateSignedUrl(filePath);
+
+    const [cacheTimestamp, lastInvalidation, fileExists] = await Promise.all([
+        storage.getItem(`cache:ts:${filePath}`),
+        storage.getItem('cache:invalidation'),
+        fetch(signedUrl, { method: 'HEAD' }).then(r => r.ok).catch(() => false),
+    ]);
+
+    // 5. Redirect if cache is fresh and file exists
+    if (cacheTimestamp && cacheTimestamp > lastInvalidation && fileExists) {
+        // Log usage in background (don't block the response)
+        waitUntil(logUsage(client, { cacheHit: true }));
+        return sendRedirect(event, signedUrl, 307);
+    }
+
+    // 6. Cache miss — generate fresh data
+    const data = await generateFreshData(client, event);
+
+    // Upload to CDN in background for next request
+    waitUntil(uploadToCDN(filePath, data));
+
+    // Log usage
+    waitUntil(logUsage(client, { cacheHit: false }));
+
+    return data;
+});
+```
+
+### The HEAD Check
+
+Before redirecting, we verify the file actually exists on the CDN with a HEAD request. This runs in parallel with cache timestamp lookups — adding zero latency in the happy path.
+
+Why is this necessary? Cache timestamps can outlive the actual files. Storage might purge old files, deployments might reset storage, or a previous upload might have failed. Without the HEAD check, you'd redirect clients to a 404.
+
+```typescript
+const [cacheTimestamp, lastInvalidation, fileExists] = await Promise.all([
+    storage.getItem(`cache:ts:${filePath}`),
+    storage.getItem('cache:invalidation'),
+    fetch(signedUrl, { method: 'HEAD' }).then(r => r.ok).catch(() => false),
+]);
+```
+
+If the HEAD check fails, the code falls through to the cache miss path — the handler generates fresh data and returns it directly while uploading to CDN in the background.
+
+### Cache Invalidation
+
+The pattern works alongside timestamp-based cache invalidation:
+
+1. When data changes, set an invalidation timestamp in your cache store
+2. Next request compares the file's cache timestamp against the invalidation timestamp
+3. If the file is stale, fall through to regeneration
+4. Fresh data gets uploaded to CDN, overwriting the old file
+
+```typescript
+// Trigger invalidation (e.g., after stock update)
+await storage.setItem('cache:invalidation', Date.now());
+
+// Next API request:
+// cacheTimestamp (old) < lastInvalidation (new) → regenerate
+```
+
+The CDN file gets overwritten on upload, and most CDNs auto-purge their edge cache when storage content changes.
+
+### Rebuild Lock (Thundering Herd Prevention)
+
+When cache is cold or invalidated, multiple concurrent requests could all trigger the expensive handler simultaneously. A simple lock prevents this:
+
+```typescript
+const lockKey = `lock:${filePath}`;
+const existingLock = await storage.getItem(lockKey);
+
+if (existingLock) {
+    // Another request is already rebuilding
+    if (fileExists) {
+        // Stale file exists — redirect to it while rebuild happens
+        return sendRedirect(event, signedUrl, 307);
+    }
+    // No file at all — execute handler but skip upload
+    return await generateFreshData(client, event);
+}
+
+// First request — acquire lock and rebuild
+await storage.setItem(lockKey, Date.now(), { ttl: 30 });
+const data = await generateFreshData(client, event);
+
+// Upload and release lock in background
+waitUntil(async () => {
+    try {
+        await uploadToCDN(filePath, data);
+        await storage.setItem(`cache:ts:${filePath}`, Date.now());
+    } finally {
+        await storage.removeItem(lockKey);
+    }
+});
+
+return data;
+```
+
+The lock has a short TTL (30 seconds) as a safety net — if the process crashes, the lock auto-expires rather than blocking all subsequent requests.
+
+## What the CDN Handles For You
+
+Once you redirect to the CDN, it handles everything the proxy used to do (and does it better):
+
+| Concern | Proxy Approach | CDN Redirect Approach |
+|---------|---------------|----------------------|
+| **Content-Type** | Set manually per format | Inferred from file extension |
+| **Compression** | Must handle gzip/brotli yourself | Automatic at edge, per client |
+| **Content-Length** | Error-prone with compressed streams | Always correct |
+| **Global distribution** | Single origin region | Served from nearest edge |
+| **Bandwidth cost** | Paid on every request | Zero through origin |
+| **Partial response risk** | Real, hard to detect | CDN handles retries |
+
+For XML and JSON files, CDNs infer the correct `Content-Type` from the file extension (`.json` → `application/json`, `.xml` → `application/xml`). Compression is negotiated between the CDN edge and the client based on `Accept-Encoding` — your server never touches content encoding.
+
+## Performance Impact
+
+The numbers speak for themselves:
+
+| Metric | Proxy Pattern | Redirect Pattern |
+|--------|--------------|-----------------|
+| Origin bandwidth (cache hit) | 500KB-2MB per request | ~0 (redirect response only) |
+| Response time (cache hit) | 200-500ms (fetch + stream) | 50-100ms (auth + redirect) |
+| Serverless compute time | Full request duration | Auth check only |
+| Failure modes | Stream truncation, encoding mismatch, CDN timeout | None on origin side |
+
+Fastly's engineering team has documented that a 5% improvement in CDN offload can mean a 50% reduction in origin load. At 90% offload rate, going to 95% doesn't sound impressive — but it halves the number of requests hitting your servers.
+
+Warner Bros. Discovery reported origin offload rates above 95% for on-demand content after implementing this pattern with Google's Media CDN, describing the integration as "remarkably straightforward."
+
+## Trade-offs
+
+This pattern isn't free. Here are the real trade-offs:
+
+**Rate limit bypass window.** Once a signed URL is issued, it can be reused within its expiry window without going through your rate limiter. Anyone with the URL can download the file directly from the CDN. Mitigation: keep expiry short (30-60 seconds). For most APIs, rate limiting is about fair usage rather than strict billing, so a brief bypass window is acceptable.
+
+**Client redirect support.** Your API clients must follow HTTP redirects. All modern HTTP libraries do this by default, but raw `curl` commands require the `-L` flag. Before switching, check your access logs for user agents — in our case, 100% of traffic used high-level HTTP libraries (Guzzle, Symfony HttpClient, axios, requests) that follow redirects automatically.
+
+**Two-request flow.** On cache hits, the client makes two requests: one to your API (gets 307), one to the CDN (gets the file). This adds a round-trip. In practice, this is faster than the proxy approach because both requests are lightweight — the API response is tiny (just a redirect header), and the CDN is geographically closer to the client.
+
+**CDN configuration.** You need to enable token authentication on your CDN, manage security keys, and ensure proper CORS headers if browser-based clients access the API.
+
+## When to Use This Pattern
+
+This pattern shines when:
+
+- **Responses are large** (>10KB) — the bandwidth savings are proportional to response size
+- **Responses are cacheable** — same content served to multiple clients
+- **You're on serverless** — compute time directly costs money
+- **You have streaming bugs** — content encoding and stream handling are error-prone
+- **You're scaling** — CDN handles global distribution better than your origin
+
+It's less useful when:
+
+- **Responses are tiny** (<1KB) — the redirect overhead exceeds the proxy cost
+- **Every response is unique** — no caching opportunity, always a cold miss
+- **Clients can't follow redirects** — embedded devices, very old HTTP stacks
+- **You need response transformation** — if the server modifies responses per-client, it needs to see the bytes
+
+## Key Takeaways
+
+1. **The proxy pattern is an anti-pattern at scale.** If your server fetches from storage and relays bytes, you're paying for bandwidth and compute to do what a CDN does better.
+
+2. **Signed URLs provide security without server involvement.** The CDN validates access cryptographically — no callback to your origin needed.
+
+3. **307 is the correct redirect code for APIs.** It preserves the HTTP method and is universally supported by modern HTTP libraries.
+
+4. **HEAD checks prevent stale redirects.** A parallel HEAD request to the CDN verifies the file exists before redirecting, with zero added latency.
+
+5. **Rebuild locks prevent thundering herds.** A simple key-with-TTL in your cache store prevents concurrent regeneration of the same file.
+
+6. **This is a well-established pattern.** Netflix, Spotify, Docker, GitHub, and AWS all use variations of it. You're not inventing something new — you're adopting proven architecture.
+
+The implementation took us from debugging stream truncation and content encoding mismatches to a system where the origin server does almost no work on cache hits. The CDN handles compression, global distribution, and content delivery. Our server just says "go there" and moves on to the next request.
+
+Sometimes the best optimization isn't making your server faster at proxying bytes — it's not proxying bytes at all.
