@@ -1,0 +1,176 @@
+---
+title: 'How Splitting a Nuxt Monolith Into Standalone Services Fixed Our API Reliability Issues'
+date: 2026-03-14T12:00:00Z
+summary: 'Our monolithic Nuxt app handled everything — storefront, B2B API, cron jobs, and marketing sites. When API clients started reporting truncated responses and environment variable bugs surfaced in production, we extracted services into standalone Nitro apps. Here is what broke, what we learned, and why the split was worth it.'
+tags: ['Architecture', 'Nuxt', 'Nitro', 'API Design', 'Monolith', 'Microservices', 'DevOps', 'TypeScript']
+---
+
+## The Starting Point: One App Does Everything
+
+We had a single Nuxt application that served a public-facing e-commerce storefront, a B2B API for external integrations, scheduled cron jobs for data synchronization, and a marketing site — all deployed as one unit on Vercel.
+
+It worked. For a while.
+
+The problem with monoliths isn't that they're bad architecture — they're great for moving fast early on. The problem is that different workloads have different reliability requirements, and cramming them into one deployment means they share failure modes.
+
+Our storefront could tolerate a brief hiccup during deployment. Our B2B API could not — external clients had automated pipelines that broke on any interruption. Cron jobs that synced inventory data needed to run reliably on schedule, but a spike in storefront traffic could starve them of resources.
+
+## The Breaking Point: Three Problems at Once
+
+### Problem 1: API Response Proxying Was Fragile
+
+Our B2B API served product catalogs — JSON and XML files ranging from 500KB to 2MB. The architecture looked like this:
+
+```
+Client → Nuxt API Route (auth + fetch from storage) → stream response back
+```
+
+This proxy pattern had a nasty bug. When the server fetched compressed files from CDN storage, the HTTP client would automatically decompress the response. But the `Content-Length` header still reflected the compressed size. Clients received 800KB of data but the header said 300KB — some HTTP libraries would truncate the response at the header-specified length.
+
+We were shipping half-complete product catalogs to B2B clients and didn't know it until they reported missing products.
+
+### Problem 2: Environment Variables Disappeared in Production
+
+When we first extracted the B2B API into a standalone Nitro app (separate from Nuxt), we used the same pattern we'd always used for configuration:
+
+```typescript
+const config = useRuntimeConfig();
+const username = config.V2SRC_USERNAME;
+```
+
+This worked perfectly in development. In production, every value was `undefined`.
+
+The root cause was subtle: `useRuntimeConfig()` in Nuxt reads environment variables at runtime through a special mechanism — Nuxt maps `NUXT_`-prefixed env vars to the runtime config automatically. But standalone Nitro apps (without Nuxt) bake `runtimeConfig` values at **build time** via Rollup. At runtime, Nitro only overrides via `NITRO_`-prefixed variables, not `NUXT_`-prefixed ones.
+
+We had dozens of environment variables prefixed with `NUXT_` in our hosting platform. None of them reached the standalone Nitro app at runtime.
+
+The debugging process was painful. We added temporary diagnostic endpoints, checked logs, compared build-time vs runtime values — all while the API was partially broken in production. The fix required either renaming every environment variable (breaking other services) or finding an alternative configuration approach.
+
+### Problem 3: Cron Jobs Competed With User Traffic
+
+Our data synchronization ran as cron-triggered API routes inside the main Nuxt app. Every sync cycle consumed the same serverless function pool as user requests. During peak traffic, cron jobs would time out. During cron execution, user requests would queue.
+
+On serverless platforms with concurrency limits, this is a zero-sum game.
+
+## The Split: Three Services From One
+
+We extracted the monolith into three distinct services:
+
+```
+Before:
+┌──────────────────────────────┐
+│        Nuxt Monolith         │
+│  Storefront + API + Crons    │
+│  + Marketing Site            │
+└──────────────────────────────┘
+
+After:
+┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│  Nuxt App    │ │  Nitro API   │ │ Nitro Crons  │
+│  Storefront  │ │  B2B Data    │ │  Data Sync   │
+│  + Dashboard │ │  Feeds       │ │  + Collection│
+└──────────────┘ └──────────────┘ └──────────────┘
+```
+
+Each service is a standalone deployment. The Nuxt app kept the storefront and dashboard. The API became a pure Nitro app handling B2B data feeds. Cron jobs moved to a dedicated Nitro app focused solely on scheduled tasks.
+
+### The Redirect Pattern
+
+The API proxy problem had an elegant solution: **stop proxying entirely**. Instead of fetching files from CDN and streaming them through our server, we authenticate the request, generate a signed CDN URL, and return a 307 redirect:
+
+```
+Before: Client → API (auth + proxy bytes) → Response
+After:  Client → API (auth + sign URL) → 307 → CDN (direct download)
+```
+
+No more `Content-Length` mismatches. No more stream truncation. No more paying for serverless compute to relay bytes. The API server handles authentication and access control, then gets out of the way.
+
+This pattern isn't novel — Netflix, Spotify, Docker Registry, and GitHub all use it. The Docker Registry HTTP API V2 even requires clients to follow 307 redirects by specification.
+
+For existing B2B clients who couldn't update their integrations immediately, the main Nuxt app kept the old endpoints but replaced the proxy logic with simple 307 redirects to the new API service. Zero breaking changes for clients, zero byte proxying.
+
+### Solving the Environment Variable Problem
+
+For standalone Nitro apps, we adopted a typed environment validation approach using schema-based validation at startup:
+
+```typescript
+import { createEnv } from '@t3-oss/env-core';
+import { z } from 'zod';
+
+export const env = createEnv({
+  server: {
+    DATABASE_URL: z.string().url(),
+    CDN_SECURITY_KEY: z.string().min(1),
+    API_TOKEN: z.string().min(1),
+  },
+  runtimeEnv: process.env,
+});
+```
+
+This solved three problems at once:
+
+1. **No more silent failures** — if an env var is missing, the app crashes at startup with a clear error instead of serving broken responses
+2. **Full TypeScript inference** — `env.DATABASE_URL` is typed as `string`, not `string | undefined`
+3. **No framework magic** — reads directly from `process.env`, works identically in Nuxt, Nitro, or plain Node.js
+
+The shift from "check if it works in production" to "crash loudly at deploy time" eliminated an entire class of configuration bugs.
+
+### Isolating Cron Jobs
+
+Moving cron jobs to a dedicated service was the simplest change with the biggest operational impact. The cron service has its own deployment, its own resource limits, and its own error tracking.
+
+Benefits we saw immediately:
+
+- **No resource contention** — cron jobs run on their own function pool, storefront traffic is unaffected
+- **Independent scaling** — we can set different memory/timeout limits for data sync (which needs more resources) vs storefront (which needs faster cold starts)
+- **Cleaner monitoring** — cron failures show up in their own dashboard, not mixed into storefront error logs
+- **Safer deploys** — deploying a cron fix doesn't redeploy the storefront
+
+## What We Learned About ESM in Standalone Nitro
+
+One surprising issue: `lodash-es` imports that worked fine in Nuxt broke in standalone Nitro deployed to serverless platforms.
+
+The problem was import paths. In Nuxt, the bundler resolves bare imports like `import sortBy from 'lodash-es/sortBy'` during build. Standalone Nitro on serverless sometimes runs closer to Node's native ESM resolution, which requires explicit file extensions:
+
+```typescript
+// Works in Nuxt (bundler resolves it)
+import sortBy from 'lodash-es/sortBy';
+
+// Required in standalone Nitro on some serverless runtimes
+import sortBy from 'lodash-es/sortBy.js';
+```
+
+This is one of those bugs that never appears locally, passes all tests, and only manifests in production on a specific runtime. The fix was simple once diagnosed — add `.js` extensions — but finding it required comparing local behavior with production logs.
+
+## The Migration Checklist
+
+If you're considering a similar split, here's what we'd do differently:
+
+**Before splitting:**
+1. **Map your environment variables** — understand which ones are framework-managed (like Nuxt's `NUXT_` prefix mapping) vs raw `process.env` reads
+2. **Audit your import paths** — check for bare imports that rely on bundler resolution
+3. **Identify shared code** — extract into packages before splitting, not during
+4. **Set up monitoring per-service** — you need independent health checks before you split, not after
+
+**During the split:**
+1. **Keep backward compatibility** — old endpoints should redirect to new service, not disappear
+2. **Validate env vars at startup** — schema-based validation catches misconfigurations before they reach users
+3. **Test the deployment pipeline** — standalone Nitro deploys differently than Nuxt; verify the build output
+
+**After splitting:**
+1. **Clean up dead code** — the monolith will have leftover handlers, utilities, and imports that no longer serve a purpose
+2. **Update documentation** — API URLs change, deployment flows change, monitoring dashboards need updating
+3. **Monitor for a week** — watch error rates, response times, and resource usage across all services
+
+## Was It Worth It?
+
+The split took about a week of active development, including debugging the environment variable issues and ESM import problems. Here's what we gained:
+
+- **API reliability** — B2B clients stopped reporting truncated responses immediately after switching to the redirect pattern
+- **Faster debugging** — when something breaks, we know which service to look at. Cron failure? Check the cron service. API error? Check the API service. Before, everything was interleaved in one log stream
+- **Independent deployments** — fixing a cron bug no longer requires redeploying the storefront
+- **Cost reduction** — the API server no longer proxies megabytes of data through serverless functions
+
+The monolith served us well for the first phase of development. But when different parts of your application have different reliability requirements, different scaling characteristics, and different deployment cadences, the operational overhead of keeping them together exceeds the complexity of splitting them apart.
+
+The right time to split isn't when your monolith fails — it's when you realize that one workload's problems are becoming another workload's problems. For us, that was B2B API reliability issues bleeding into storefront performance. Once we saw that clearly, the split was straightforward.
