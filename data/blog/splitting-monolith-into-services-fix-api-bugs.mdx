@@ -1,97 +1,198 @@
 ---
-title: 'How Splitting a Nuxt Monolith Into Standalone Services Fixed Our API Reliability Issues'
+title: 'When Doubling Your Server Memory Is the Wrong Fix: How Service Separation Solved Our OOM Crisis'
 date: 2026-03-14T12:00:00Z
-summary: 'Our monolithic Nuxt app handled everything — storefront, B2B API, cron jobs, and marketing sites. When API clients started reporting truncated responses and environment variable bugs surfaced in production, we extracted services into standalone Nitro apps. Here is what broke, what we learned, and why the split was worth it.'
-tags: ['Architecture', 'Nuxt', 'Nitro', 'API Design', 'Monolith', 'Microservices', 'DevOps', 'TypeScript']
+summary: 'Our monolithic Nuxt app kept crashing at the 2GB memory limit. We doubled to 4GB — twice the cost, same underlying problem. After five days of failed optimization attempts (streaming compression, Redis polling, SWR caching), we split the monolith into three standalone services. Each got its own 2GB allocation, total cost dropped, and the crashes stopped.'
+tags: ['Architecture', 'Nuxt', 'Nitro', 'Memory', 'Performance', 'Serverless', 'Vercel', 'TypeScript']
 ---
 
-## The Starting Point: One App Does Everything
+## The 2GB Wall
 
-We had a single Nuxt application that served a public-facing e-commerce storefront, a B2B API for external integrations, scheduled cron jobs for data synchronization, and a marketing site — all deployed as one unit on Vercel.
+We run an e-commerce platform on Vercel with a single Nuxt application that handles everything: the public storefront, a B2B API serving product catalogs to external integrations, scheduled cron jobs syncing inventory from upstream systems, and a marketing site. One codebase, one deployment, one serverless function pool.
 
-It worked. For a while.
-
-The problem with monoliths isn't that they're bad architecture — they're great for moving fast early on. The problem is that different workloads have different reliability requirements, and cramming them into one deployment means they share failure modes.
-
-Our storefront could tolerate a brief hiccup during deployment. Our B2B API could not — external clients had automated pipelines that broke on any interruption. Cron jobs that synced inventory data needed to run reliably on schedule, but a spike in storefront traffic could starve them of resources.
-
-## The Breaking Point: Three Problems at Once
-
-### Problem 1: API Response Proxying Was Fragile
-
-Our B2B API served product catalogs — JSON and XML files ranging from 500KB to 2MB. The architecture looked like this:
+The B2B API serves product catalogs — JSON and XML files built from ~3,000 products with 30+ relations each. Building one of these catalogs looks roughly like this in memory:
 
 ```
-Client → Nuxt API Route (auth + fetch from storage) → stream response back
+Prisma findMany (all products):     ~200-300MB
+Transform to response format:       ~50-100MB
+JSON.stringify the entire array:     ~50-100MB  ← doubles the allocation
+gzip compression:                    ~20MB output (input still in scope)
+Base64 encoding:                     ~27MB
+─────────────────────────────────
+Peak per rebuild:                    ~500MB
 ```
 
-This proxy pattern had a nasty bug. When the server fetched compressed files from CDN storage, the HTTP client would automatically decompress the response. But the `Content-Length` header still reflected the compressed size. Clients received 800KB of data but the header said 300KB — some HTTP libraries would truncate the response at the header-specified length.
+On a 2GB serverless instance, a single rebuild uses a quarter of available memory. That sounds manageable — until you understand how modern serverless platforms handle concurrency.
 
-We were shipping half-complete product catalogs to B2B clients and didn't know it until they reported missing products.
+## Why Serverless Concurrency Made It Worse
 
-### Problem 2: Environment Variables Disappeared in Production
+Our hosting platform uses a compute model that reuses Node.js instances across multiple HTTP requests. Instead of spinning up a fresh instance per request (cold start), it routes multiple concurrent requests to the same running process to reduce latency and cost.
 
-When we first extracted the B2B API into a standalone Nitro app (separate from Nuxt), we used the same pattern we'd always used for configuration:
+This is great for most workloads. But it means **memory stacks**. If three B2B clients request product catalogs simultaneously during a cache invalidation window, each triggers a rebuild:
+
+```
+Request 1: 500MB ─────────────────────────────────→
+Request 2:      500MB ────────────────────────────→
+Request 3:           500MB ───────────────────────→
+                     ↑
+              Total: 1.5GB on a 2GB instance
+              One more request = OOM crash
+```
+
+Our upstream inventory system synced data 20+ times per cron run, each sync invalidating the B2B cache. During these windows, multiple clients would hit stale cache simultaneously, all triggering concurrent rebuilds. The process would spike to 2GB and crash.
+
+## The Band-Aid: Doubling Memory
+
+The immediate fix was obvious: upgrade from 2GB to 4GB. It worked — crashes stopped. But it doubled our compute costs, and we knew the real problem wasn't solved. We were planning to scale from 3,000 to 10,000 products. At 10k products, each rebuild would consume closer to 1.5GB. Even on a 4GB instance, two concurrent rebuilds would crash.
+
+We were buying time, not fixing the problem.
+
+## Five Days of Failed Optimizations
+
+Before arriving at the eventual solution, we spent five days trying to optimize our way out of the problem. Each approach had merit in theory but failed in practice. Understanding why they failed is more useful than knowing they failed.
+
+### Attempt 1: In-Memory Deduplication
+
+**Idea:** Use an in-memory `Map<string, Promise>` to deduplicate concurrent requests. If request B arrives while request A is already rebuilding, B waits for A's Promise instead of starting its own rebuild.
 
 ```typescript
-const config = useRuntimeConfig();
-const username = config.V2SRC_USERNAME;
+const inflightRequests = new Map<string, Promise<Response>>();
+
+// If already rebuilding, wait for existing Promise
+if (inflightRequests.has(cacheKey)) {
+  return inflightRequests.get(cacheKey);
+}
 ```
 
-This worked perfectly in development. In production, every value was `undefined`.
+**Why it failed:** The concurrency model doesn't share JavaScript heap state across concurrent requests the way we assumed. Each request gets its own execution context. The `Map` in request A is invisible to request B. No deduplication actually happens — both requests rebuild independently.
 
-The root cause was subtle: `useRuntimeConfig()` in Nuxt reads environment variables at runtime through a special mechanism — Nuxt maps `NUXT_`-prefixed env vars to the runtime config automatically. But standalone Nitro apps (without Nuxt) bake `runtimeConfig` values at **build time** via Rollup. At runtime, Nitro only overrides via `NITRO_`-prefixed variables, not `NUXT_`-prefixed ones.
+### Attempt 2: Redis Rebuild Flags + Polling
 
-We had dozens of environment variables prefixed with `NUXT_` in our hosting platform. None of them reached the standalone Nitro app at runtime.
+**Idea:** Since in-memory state wasn't shared, use Redis as distributed coordination. Set a flag in Redis when a rebuild starts, have other requests poll until the flag clears.
 
-The debugging process was painful. We added temporary diagnostic endpoints, checked logs, compared build-time vs runtime values — all while the API was partially broken in production. The fix required either renaming every environment variable (breaking other services) or finding an alternative configuration approach.
+```
+Request 1: SET rebuild:products = true (TTL 30s) → rebuild → clear flag
+Request 2: sees flag → sleep 3s → check → sleep 3s → check → sleep 3s → timeout
+```
 
-### Problem 3: Cron Jobs Competed With User Traffic
+**Why it failed:** The polling added up to 9 seconds of latency (3 attempts × 3 second sleep). If the rebuilding request crashed, the flag persisted for 30 seconds — every other request waited the full 9 seconds before giving up and running its own rebuild anyway. The complexity grew fast, the latency was unacceptable, and it didn't actually prevent memory stacking — it just delayed it.
 
-Our data synchronization ran as cron-triggered API routes inside the main Nuxt app. Every sync cycle consumed the same serverless function pool as user requests. During peak traffic, cron jobs would time out. During cron execution, user requests would queue.
+### Attempt 3: Streaming Compression
 
-On serverless platforms with concurrency limits, this is a zero-sum game.
+**Idea:** Instead of `JSON.stringify(entireArray)` then `gzip()`, feed products one-by-one into a streaming compressor to avoid the massive intermediate string allocation.
 
-## The Split: Three Services From One
+```typescript
+const deflator = new pako.Deflate({ gzip: true, level: 6 });
+deflator.push('{"data":[', false);
+for (const product of products) {
+  deflator.push(JSON.stringify(product), false);
+}
+deflator.push(']}', true);
+```
 
-We extracted the monolith into three distinct services:
+**Result:** It worked — reduced peak memory by ~100MB. But 400MB is still too much when multiplied by concurrent requests. This was an optimization to the wrong layer. Saving 100MB per rebuild doesn't matter when the problem is three rebuilds happening simultaneously.
+
+### Attempt 4: Stale-While-Revalidate
+
+**Idea:** Always return the stale cached response immediately, trigger a background rebuild. Clients get fast responses, cache stays reasonably fresh.
+
+**Why it failed:** SWR works well for read-heavy endpoints where slight staleness is acceptable. But B2B clients making procurement decisions needed current stock data. More importantly, the background rebuild still consumed 500MB — it just moved the memory pressure from the request path to the background. The OOM still happened; it just happened asynchronously.
+
+### The Revert
+
+After five days of incremental complexity — dedup maps, Redis flags, streaming compression, SWR — we had a codebase that was harder to understand, slower in some cases, and still vulnerable to memory spikes. We reverted everything in a single afternoon. Nine revert commits in rapid succession.
+
+The failed attempts taught us something important: **you can't optimize your way out of a resource isolation problem**. No matter how clever the code, if multiple memory-intensive workloads share a single bounded memory pool, spikes will eventually exceed the boundary. The solution had to be architectural, not algorithmic.
+
+## A Second Memory Problem We Didn't Know About
+
+While fighting the B2B memory issue, we discovered a separate memory leak in our i18n (internationalization) setup that was compounding the problem.
+
+Our site supports 11 languages. Every page used `useSeoMeta()` with direct translation function calls:
+
+```typescript
+// This creates reactive tracking dependencies into the i18n message store
+useSeoMeta({
+  title: t('seo.title'),
+  description: t('seo.description'),
+  ogTitle: t('seo.title'),
+  ogDescription: t('seo.description'),
+})
+```
+
+On the client side, this is fine — Vue cleans up reactivity when the component unmounts. But during Server-Side Rendering, these reactive dependencies weren't properly disposed. Each page render leaked approximately 11MB of orphaned reactive proxies into the i18n message store.
+
+Remember: the serverless platform reuses instances across requests. Request 1 leaks 11MB. Request 2 leaks another 11MB. After 150 requests, you've leaked 1.6GB — and the OOM crash has nothing to do with B2B catalogs.
+
+The fix was wrapping translation calls in arrow functions, which Vue can properly track and clean up:
+
+```typescript
+// Arrow functions create computed getters that Vue disposes properly
+useSeoMeta({
+  title: () => t('seo.title'),
+  description: () => t('seo.description'),
+  ogTitle: () => t('seo.title'),
+  ogDescription: () => t('seo.description'),
+})
+```
+
+We found and fixed this pattern across 43 pages (174 direct `t()` calls). But the discovery reinforced the core insight: **when everything runs in one process, every memory problem affects every workload**. The i18n leak was exhausting the budget that the B2B rebuilds needed. Each problem made the other worse.
+
+## The Actual Fix: Three Services Instead of One
+
+Once we accepted that the problem was resource isolation, the solution was straightforward: split the monolith into three standalone services, each with its own memory allocation.
 
 ```
 Before:
-┌──────────────────────────────┐
-│        Nuxt Monolith         │
-│  Storefront + API + Crons    │
-│  + Marketing Site            │
-└──────────────────────────────┘
+┌───────────────────────────────────┐
+│         Nuxt Monolith (4GB)       │
+│  Storefront + B2B API + Crons     │
+│  Peak: 500MB API + 11MB/req leak  │
+│        + cron spikes              │
+└───────────────────────────────────┘
 
 After:
 ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
 │  Nuxt App    │ │  Nitro API   │ │ Nitro Crons  │
-│  Storefront  │ │  B2B Data    │ │  Data Sync   │
-│  + Dashboard │ │  Feeds       │ │  + Collection│
+│  2GB         │ │  2GB         │ │  2GB         │
+│  Storefront  │ │  B2B Feeds   │ │  Data Sync   │
+│  + Dashboard │ │  Only        │ │  Only        │
 └──────────────┘ └──────────────┘ └──────────────┘
 ```
 
-Each service is a standalone deployment. The Nuxt app kept the storefront and dashboard. The API became a pure Nitro app handling B2B data feeds. Cron jobs moved to a dedicated Nitro app focused solely on scheduled tasks.
+The B2B API became a standalone Nitro app — same framework (Nitro is Nuxt's server engine), but without the full Nuxt overhead of Vue SSR, routing, i18n context, and component rendering. Just HTTP handlers, authentication, and data serialization.
 
-### The Redirect Pattern
+Cron jobs moved to another standalone Nitro app. These jobs averaged 961MB during execution with peaks of 1.3GB — they'd been competing for the same memory pool as user-facing requests.
 
-The API proxy problem had an elegant solution: **stop proxying entirely**. Instead of fetching files from CDN and streaming them through our server, we authenticate the request, generate a signed CDN URL, and return a 307 redirect:
+The main Nuxt app kept the storefront and dashboard. Without B2B rebuilds and cron job spikes consuming its memory, it dropped back to 2GB Standard tier comfortably.
 
-```
-Before: Client → API (auth + proxy bytes) → Response
-After:  Client → API (auth + sign URL) → 307 → CDN (direct download)
-```
+### The Math That Made It Obvious
 
-No more `Content-Length` mismatches. No more stream truncation. No more paying for serverless compute to relay bytes. The API server handles authentication and access control, then gets out of the way.
+**Before (monolith):**
+- 1 × 4GB instance = 4GB total allocation
+- B2B rebuild (500MB) + cron spike (1.3GB) + storefront + i18n leak = competing for 4GB
+- Cost: 2x standard pricing
 
-This pattern isn't novel — Netflix, Spotify, Docker Registry, and GitHub all use it. The Docker Registry HTTP API V2 even requires clients to follow 307 redirects by specification.
+**After (three services):**
+- 3 × 2GB instances = 6GB total allocation
+- But: each workload only competes with itself
+- B2B gets 2GB — can handle 3 concurrent rebuilds safely
+- Crons get 2GB — peak 1.3GB has comfortable headroom
+- Storefront gets 2GB — lightweight after removing heavy workloads
+- Cost: 3x standard pricing per instance, but each instance is standard tier (not performance tier)
 
-For existing B2B clients who couldn't update their integrations immediately, the main Nuxt app kept the old endpoints but replaced the proxy logic with simple 307 redirects to the new API service. Zero breaking changes for clients, zero byte proxying.
+The per-instance cost went down. The total allocation went up. And the crashes stopped completely because no single workload could affect another's memory budget.
 
-### Solving the Environment Variable Problem
+## What Broke During the Split
 
-For standalone Nitro apps, we adopted a typed environment validation approach using schema-based validation at startup:
+Service separation isn't free. Here's what went wrong and how we fixed each issue.
+
+### Environment Variables Disappeared in Production
+
+In Nuxt, `useRuntimeConfig()` automatically maps `NUXT_`-prefixed environment variables at runtime. We had dozens of them in our hosting platform. When we moved to standalone Nitro (without Nuxt), this mapping stopped working.
+
+The root cause: standalone Nitro bakes `runtimeConfig` values at **build time** via Rollup. At runtime, it only reads `NITRO_`-prefixed overrides. Our `NUXT_`-prefixed variables were invisible.
+
+We spent an afternoon adding temporary diagnostic endpoints to production, comparing build-time vs runtime values, before understanding the framework distinction. The fix was schema-based validation that reads `process.env` directly:
 
 ```typescript
 import { createEnv } from '@t3-oss/env-core';
@@ -101,36 +202,17 @@ export const env = createEnv({
   server: {
     DATABASE_URL: z.string().url(),
     CDN_SECURITY_KEY: z.string().min(1),
-    API_TOKEN: z.string().min(1),
+    SYNC_TOKEN: z.string().min(1),
   },
   runtimeEnv: process.env,
 });
 ```
 
-This solved three problems at once:
+If any variable is missing or empty, the app crashes at startup with a clear error — not silently in production after a client reports broken responses.
 
-1. **No more silent failures** — if an env var is missing, the app crashes at startup with a clear error instead of serving broken responses
-2. **Full TypeScript inference** — `env.DATABASE_URL` is typed as `string`, not `string | undefined`
-3. **No framework magic** — reads directly from `process.env`, works identically in Nuxt, Nitro, or plain Node.js
+### ESM Import Paths Broke on Serverless
 
-The shift from "check if it works in production" to "crash loudly at deploy time" eliminated an entire class of configuration bugs.
-
-### Isolating Cron Jobs
-
-Moving cron jobs to a dedicated service was the simplest change with the biggest operational impact. The cron service has its own deployment, its own resource limits, and its own error tracking.
-
-Benefits we saw immediately:
-
-- **No resource contention** — cron jobs run on their own function pool, storefront traffic is unaffected
-- **Independent scaling** — we can set different memory/timeout limits for data sync (which needs more resources) vs storefront (which needs faster cold starts)
-- **Cleaner monitoring** — cron failures show up in their own dashboard, not mixed into storefront error logs
-- **Safer deploys** — deploying a cron fix doesn't redeploy the storefront
-
-## What We Learned About ESM in Standalone Nitro
-
-One surprising issue: `lodash-es` imports that worked fine in Nuxt broke in standalone Nitro deployed to serverless platforms.
-
-The problem was import paths. In Nuxt, the bundler resolves bare imports like `import sortBy from 'lodash-es/sortBy'` during build. Standalone Nitro on serverless sometimes runs closer to Node's native ESM resolution, which requires explicit file extensions:
+Imports that worked in Nuxt failed in standalone Nitro on serverless:
 
 ```typescript
 // Works in Nuxt (bundler resolves it)
@@ -140,37 +222,64 @@ import sortBy from 'lodash-es/sortBy';
 import sortBy from 'lodash-es/sortBy.js';
 ```
 
-This is one of those bugs that never appears locally, passes all tests, and only manifests in production on a specific runtime. The fix was simple once diagnosed — add `.js` extensions — but finding it required comparing local behavior with production logs.
+Nuxt's bundler resolves bare imports during build. Standalone Nitro on certain serverless runtimes uses Node's native ESM resolution, which requires explicit file extensions. This never appeared locally, passed all tests, and only manifested in production.
 
-## The Migration Checklist
+### Legacy Clients Needed Backward Compatibility
 
-If you're considering a similar split, here's what we'd do differently:
+B2B clients had hardcoded API URLs pointing to our main domain. We couldn't break those overnight. The solution: the main Nuxt app kept the old endpoints but replaced the handler logic with 307 redirects:
 
-**Before splitting:**
-1. **Map your environment variables** — understand which ones are framework-managed (like Nuxt's `NUXT_` prefix mapping) vs raw `process.env` reads
-2. **Audit your import paths** — check for bare imports that rely on bundler resolution
-3. **Identify shared code** — extract into packages before splitting, not during
-4. **Set up monitoring per-service** — you need independent health checks before you split, not after
+```typescript
+export default defineEventHandler((event) => {
+  const query = event.node.req.url?.split('?')[1] ?? '';
+  return sendRedirect(event,
+    `https://api.example.com/api/products${query ? `?${query}` : ''}`,
+    307
+  );
+});
+```
 
-**During the split:**
-1. **Keep backward compatibility** — old endpoints should redirect to new service, not disappear
-2. **Validate env vars at startup** — schema-based validation catches misconfigurations before they reach users
-3. **Test the deployment pipeline** — standalone Nitro deploys differently than Nuxt; verify the build output
+Every HTTP client follows 307 redirects automatically. Zero code changes required on the client side. The main app stopped touching API bytes entirely.
 
-**After splitting:**
-1. **Clean up dead code** — the monolith will have leftover handlers, utilities, and imports that no longer serve a purpose
-2. **Update documentation** — API URLs change, deployment flows change, monitoring dashboards need updating
-3. **Monitor for a week** — watch error rates, response times, and resource usage across all services
+## The Redirect Bonus
 
-## Was It Worth It?
+Splitting the API also let us fix the response proxying problem that started the whole investigation. Instead of the API server fetching files from CDN storage and streaming bytes back to clients (which caused `Content-Length` mismatches and truncated responses), we now authenticate the request, generate a signed CDN URL, and redirect:
 
-The split took about a week of active development, including debugging the environment variable issues and ESM import problems. Here's what we gained:
+```
+Before: Client → API (auth + proxy 2MB of bytes) → Response
+After:  Client → API (auth + generate signed URL) → 307 → CDN (direct download)
+```
 
-- **API reliability** — B2B clients stopped reporting truncated responses immediately after switching to the redirect pattern
-- **Faster debugging** — when something breaks, we know which service to look at. Cron failure? Check the cron service. API error? Check the API service. Before, everything was interleaved in one log stream
-- **Independent deployments** — fixing a cron bug no longer requires redeploying the storefront
-- **Cost reduction** — the API server no longer proxies megabytes of data through serverless functions
+The API server handles authentication and access control, then gets out of the way. The CDN handles content delivery, compression, and edge distribution. No more mismatched headers. No more truncated catalogs. No more paying for serverless compute to relay bytes between two other systems.
 
-The monolith served us well for the first phase of development. But when different parts of your application have different reliability requirements, different scaling characteristics, and different deployment cadences, the operational overhead of keeping them together exceeds the complexity of splitting them apart.
+Production logs after the switch showed an 83.4% CDN cache hit rate, with cache hits completing 24x faster than cold misses (58ms vs 471ms median).
 
-The right time to split isn't when your monolith fails — it's when you realize that one workload's problems are becoming another workload's problems. For us, that was B2B API reliability issues bleeding into storefront performance. Once we saw that clearly, the split was straightforward.
+## When to Split Your Monolith
+
+We made two mistakes in timing: we should have split earlier, and we should have stopped trying to optimize within the monolith sooner.
+
+**Split when you see these signals:**
+- **Memory contention between workloads** — one feature's spike crashes another feature
+- **Different reliability requirements** — your API needs 99.9% uptime but your cron jobs can tolerate failures
+- **Scaling costs grow non-linearly** — upgrading from 2GB to 4GB doubles cost but only buys time
+- **Debugging becomes guesswork** — error logs from three different workloads interleaved in one stream
+
+**Don't split when:**
+- Your monolith is working fine and costs are reasonable
+- You're splitting for organizational reasons (team boundaries) rather than technical ones
+- You don't have per-service monitoring ready
+
+**And when you do split:**
+- Keep backward compatibility with redirects, not breaking changes
+- Validate configuration at startup, not at request time
+- Test on the actual deployment platform, not just locally
+- Clean up dead code aggressively — our main app lost 6,300+ lines after the migration
+
+## The Takeaway
+
+The instinct when hitting memory limits is to optimize: compress harder, cache smarter, deduplicate requests. We spent five days on that instinct. None of it worked because we were solving the wrong problem.
+
+The problem wasn't that our code used too much memory. The problem was that unrelated workloads shared a single memory boundary. A B2B catalog rebuild shouldn't crash the storefront. A cron job shouldn't slow down user requests. An i18n memory leak shouldn't exhaust the budget that the API needs.
+
+Once we reframed "how do we use less memory?" as "why are these workloads sharing memory at all?", the solution took two days to implement and immediately resolved issues we'd been fighting for weeks.
+
+Sometimes the right optimization isn't better code — it's better boundaries.
