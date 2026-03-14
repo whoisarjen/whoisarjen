@@ -1,0 +1,358 @@
+---
+title: 'HMAC Timestamp Tokens: Zero-Trust Communication Between Your Own Services'
+date: 2026-03-15T12:00:00Z
+summary: 'How we secured inter-service communication with HMAC-SHA256 signed tokens that expire in 10 seconds — no session state, no API keys to rotate, no middleware databases to query.'
+tags: ['Security', 'HMAC', 'Architecture', 'Node.js', 'TypeScript', 'Microservices', 'Authentication']
+---
+
+## The Problem With Trusting Yourself
+
+When you split a monolith into services, something that used to be a function call becomes an HTTP request. Yesterday, your search handler ran in the same process as your storefront — authentication was implicit. Today, it runs on a separate server, and anyone on the internet can hit its URL.
+
+The instinct is to reach for API keys. Generate a long random string, store it in both services' environment variables, and check it on every request. Simple enough:
+
+```typescript
+// Service B: check API key
+if (request.headers['x-api-key'] !== process.env.API_KEY) {
+  throw createError({ statusCode: 403, message: 'Forbidden' });
+}
+```
+
+This works until it doesn't. API keys have three properties that become liabilities at scale:
+
+**They're replayable.** If someone intercepts an API key — through a leaked log, a misconfigured debug endpoint, a compromised CI variable — they can use it forever. The key doesn't expire. The key doesn't know who's using it or when it was captured. It's valid until you manually rotate it across every service that uses it.
+
+**They're static.** Rotating an API key means updating environment variables on every service simultaneously. Miss one, and inter-service communication breaks in production. In a monorepo with three services, that's three deployments that need to happen in lockstep. In a larger architecture, it's a coordination nightmare.
+
+**They reveal nothing about intent.** An API key says "someone with this string is calling." It doesn't say when the request was made, whether the request is fresh, or if the same request has been replayed. Your service accepts identical requests at 2 AM Tuesday and 3 PM Friday with no way to distinguish legitimate traffic from replayed captures.
+
+We hit all three of these. After splitting our monolith into separate services, we needed a way for Service A to tell Service B: "I authorized this specific request, right now, and this authorization expires in seconds."
+
+## The Pattern: HMAC + Timestamp
+
+The solution is a signed timestamp token. Instead of passing a shared secret in every request, each service uses the shared secret to compute a one-time signature over a short-lived expiration timestamp.
+
+```
+Service A:
+1. Pick expiration = now + 10 seconds
+2. Compute HMAC-SHA256(secret, expiration) → token
+3. Send request with ?_token=abc...&_expires=1773494437
+
+Service B:
+1. Check: is _expires in the future? (not expired)
+2. Compute HMAC-SHA256(secret, _expires) → expected
+3. Compare token === expected (constant-time)
+4. If match → request is authentic and fresh
+```
+
+No database lookups. No session state. No token storage. The shared secret never travels over the wire. The token is mathematically bound to a specific moment in time and becomes useless 10 seconds later.
+
+## Why This Works
+
+The security of this pattern rests on three properties of HMAC (Hash-based Message Authentication Code):
+
+**Only someone with the secret can produce a valid signature.** HMAC-SHA256 takes a secret key and a message (our expiration timestamp) and produces a 256-bit signature. Without the secret, you can't forge a valid signature for any timestamp — not even if you've captured thousands of previous valid signatures.
+
+**The signature is bound to the exact input.** Changing a single character of the expiration timestamp produces a completely different signature. You can't take a valid token for `_expires=1773494437` and use it with `_expires=9999999999` to extend the validity window.
+
+**The token is time-limited by design.** Even if an attacker captures a valid token-timestamp pair from a network log, it's useless after the expiration passes. A 10-second window means the attacker has 10 seconds to replay the exact same request — and if they do, they get the exact same response the legitimate service would have gotten. There's no escalation path.
+
+Compare this to API keys, JWT tokens, or OAuth flows:
+
+| Approach | State | Rotation | Replay Window | Complexity |
+|----------|-------|----------|---------------|------------|
+| API Key | Stateless | Manual | Infinite | Low |
+| JWT | Stateless | Certificate rotation | Minutes to hours | Medium |
+| OAuth 2.0 | Requires token store | Automatic | Configurable | High |
+| Session Token | Requires database | Per-session | Until revoked | High |
+| **HMAC + Timestamp** | **Stateless** | **Change one env var** | **Seconds** | **Low** |
+
+HMAC timestamp tokens sit in a sweet spot: the simplicity of API keys with a replay window measured in seconds instead of forever.
+
+## Implementation: The Signing Side
+
+The service initiating the request computes the signature and attaches it as query parameters:
+
+```typescript
+import { createHmac } from 'node:crypto';
+
+export default defineEventHandler((event) => {
+  const secret = process.env.SERVICES_SECRET;
+
+  // Token expires 10 seconds from now
+  const expires = (Math.floor(Date.now() / 1000) + 10).toString();
+
+  // HMAC-SHA256: sign the expiration timestamp with the shared secret
+  const token = createHmac('sha256', secret)
+    .update(expires)
+    .digest('hex');
+
+  // Forward the original request with auth parameters
+  const query = getQuery(event);
+  const params = new URLSearchParams({
+    ...query as Record<string, string>,
+    _token: token,
+    _expires: expires,
+  }).toString();
+
+  const targetUrl = `https://internal-service.example.com/endpoint?${params}`;
+  return sendRedirect(event, targetUrl, 307);
+});
+```
+
+Key implementation details:
+
+- **Seconds, not milliseconds.** `Math.floor(Date.now() / 1000)` gives Unix seconds. Millisecond precision is unnecessary and makes debugging harder.
+- **Hex encoding.** `.digest('hex')` produces a URL-safe string. Base64 would require escaping `+`, `/`, and `=` characters.
+- **Query parameters, not headers.** If using 307 redirects (where the browser follows the redirect), custom headers are stripped. Query parameters survive redirects.
+
+## Implementation: The Verification Side
+
+The receiving service validates every request with a middleware that runs before any route handler:
+
+```typescript
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+export default defineEventHandler((event) => {
+  // Skip CORS preflight and health checks
+  if (event.method === 'OPTIONS' || event.path === '/') return;
+
+  const query = getQuery(event);
+  const token = typeof query._token === 'string' ? query._token : undefined;
+  const expires = typeof query._expires === 'string' ? query._expires : undefined;
+
+  // Both parameters must be present
+  if (!token || !expires) {
+    throw createError({ statusCode: 403, statusMessage: 'Forbidden' });
+  }
+
+  // Check expiration
+  const now = Math.floor(Date.now() / 1000);
+  const expiresNum = parseInt(expires);
+
+  if (isNaN(expiresNum) || now > expiresNum) {
+    throw createError({ statusCode: 403, statusMessage: 'Token expired' });
+  }
+
+  // Recompute the expected signature
+  const expected = createHmac('sha256', process.env.SERVICES_SECRET)
+    .update(expires)
+    .digest('hex');
+
+  // Constant-time comparison
+  const tokenBuffer = Buffer.from(token);
+  const expectedBuffer = Buffer.from(expected);
+
+  if (
+    tokenBuffer.length !== expectedBuffer.length ||
+    !timingSafeEqual(tokenBuffer, expectedBuffer)
+  ) {
+    throw createError({ statusCode: 403, statusMessage: 'Invalid token' });
+  }
+});
+```
+
+Three things matter in this verification:
+
+### 1. Check Expiration First
+
+Always check the timestamp before computing the HMAC. If the token is expired, there's no reason to spend CPU cycles on cryptographic operations. This also provides a clear error message: "Token expired" vs "Invalid token" helps with debugging.
+
+### 2. Constant-Time Comparison
+
+This is the most commonly overlooked detail. A naive `===` string comparison short-circuits on the first mismatched character. An attacker who can measure response times precisely could guess the expected token one character at a time (a timing attack).
+
+```typescript
+// ❌ WRONG: Timing attack vulnerable
+if (token !== expected) {
+  throw createError({ statusCode: 403 });
+}
+
+// ✅ CORRECT: Constant-time comparison
+const tokenBuffer = Buffer.from(token);
+const expectedBuffer = Buffer.from(expected);
+
+if (
+  tokenBuffer.length !== expectedBuffer.length ||
+  !timingSafeEqual(tokenBuffer, expectedBuffer)
+) {
+  throw createError({ statusCode: 403 });
+}
+```
+
+`timingSafeEqual` compares every byte regardless of whether a mismatch is found early. The comparison takes the same amount of time whether 0 bytes match or all bytes match. The explicit length check is necessary because `timingSafeEqual` throws if buffers have different lengths.
+
+Is this paranoid for inter-service communication? Maybe. But `timingSafeEqual` costs nothing in terms of performance, and it's a good habit. The day you reuse this pattern for something more exposed, the protection is already there.
+
+### 3. The Length Check Guards Against Crashes
+
+`timingSafeEqual` throws a `RangeError` if the two buffers have different lengths. Without the length check, a malformed token would crash your middleware with an unhandled exception instead of returning a clean 403. The length check is both a security measure (prevents length-based timing leaks) and a reliability measure (prevents crashes).
+
+## Why 10 Seconds?
+
+The expiration window is a trade-off between security and reliability.
+
+**Too short (1-2 seconds):** Clock drift between servers causes legitimate requests to fail. If Service A's clock is 1 second ahead of Service B's clock, a 2-second token has effectively 1 second of validity. Network latency eats into the remaining window. You'll see intermittent 403s that are hard to diagnose.
+
+**Too long (5 minutes):** The replay window becomes meaningful. An attacker who captures a valid token has 5 minutes to replay it. For endpoints that trigger side effects (data sync, cache invalidation), this could be dangerous.
+
+**10 seconds** is our sweet spot:
+
+- Accommodates 1-2 seconds of clock drift between cloud instances
+- Leaves 8+ seconds for network latency (more than enough for same-region services)
+- Short enough that replay attacks return the same response the legitimate request would have gotten — no escalation possible
+- Long enough that you'll never see a legitimate request fail due to timing
+
+If your services span geographic regions (US East to EU West), consider 15-30 seconds to account for higher latency. If they're in the same region or data center, 5-10 seconds is comfortable.
+
+## What to Sign: Timestamp Only vs. Full Request
+
+Our implementation signs only the expiration timestamp. You might wonder: shouldn't we sign the entire request (path, query parameters, body) to prevent tampering?
+
+For inter-service communication behind a redirect, signing only the timestamp is sufficient:
+
+```
+Signed timestamp:  "This request was authorized within the last 10 seconds"
+Signed full request: "This exact request with these exact parameters was authorized"
+```
+
+We chose timestamp-only because:
+
+1. **The token travels as a query parameter.** When using 307 redirects, the browser constructs the full URL including all parameters. If an attacker modifies parameters, they still need a valid HMAC — which they can't produce without the secret.
+2. **Simplicity.** Signing the full request means both services must agree on a canonical request format — parameter ordering, encoding, case sensitivity. This is a common source of subtle bugs. AWS Signature V4, which signs the full request, has a [multi-page specification](https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html) just for canonicalization.
+3. **Our threat model is replay, not tampering.** The services communicate over HTTPS, which already prevents man-in-the-middle tampering. The HMAC protects against unauthorized access and replay, not modification.
+
+If your threat model includes parameter tampering (e.g., the token is passed through an untrusted intermediary), sign the relevant parameters too:
+
+```typescript
+// Sign timestamp + path + critical parameters
+const message = `${expires}:${path}:${query.lang}`;
+const token = createHmac('sha256', secret)
+  .update(message)
+  .digest('hex');
+```
+
+But for most internal service-to-service communication over TLS, timestamp-only signing is the right complexity tradeoff.
+
+## Rotation Is Trivial
+
+Rotating the shared secret is a single environment variable change:
+
+1. Generate a new secret: `openssl rand -hex 32`
+2. Update the environment variable on all services
+3. Deploy
+
+There's no database to update, no token store to flush, no active sessions to invalidate. The moment the new secret is deployed, old tokens (which were signed with the old secret) stop validating. Since tokens expire in 10 seconds anyway, there's no "grace period" to manage.
+
+For zero-downtime rotation, you can temporarily accept both old and new secrets:
+
+```typescript
+const secrets = [process.env.SERVICES_SECRET, process.env.SERVICES_SECRET_OLD].filter(Boolean);
+
+const isValid = secrets.some(secret => {
+  const expected = createHmac('sha256', secret)
+    .update(expires)
+    .digest('hex');
+
+  const tokenBuffer = Buffer.from(token);
+  const expectedBuffer = Buffer.from(expected);
+
+  return (
+    tokenBuffer.length === expectedBuffer.length &&
+    timingSafeEqual(tokenBuffer, expectedBuffer)
+  );
+});
+```
+
+Deploy the new secret to all services with `SERVICES_SECRET_OLD` set to the previous value. Once all services are running the new code, remove the old secret environment variable. Total rotation downtime: zero.
+
+## CORS and the Browser Redirect Path
+
+If your inter-service communication uses browser redirects (307 from your frontend's API to an internal service), you'll need CORS configuration on the receiving service:
+
+```typescript
+export default defineEventHandler((event) => {
+  const didHandleCors = handleCors(event, {
+    origin: ['https://your-app.example.com', 'http://localhost:3000'],
+    credentials: true,
+    methods: '*',
+    allowHeaders: ['Content-Type'],
+  });
+
+  if (didHandleCors) return; // Handled OPTIONS preflight
+});
+```
+
+The critical detail: `Access-Control-Allow-Origin` must be a specific origin, not `*`, when `credentials: true`. Browsers enforce this strictly — a wildcard origin with credentials will silently fail.
+
+Order your middleware carefully:
+
+```
+0000-cors.middleware.ts      ← Handle CORS preflight first
+0001-security.middleware.ts  ← Logging, rate limiting
+0002-token-auth.middleware.ts ← HMAC validation (skips OPTIONS)
+```
+
+The token auth middleware must skip `OPTIONS` requests — CORS preflight never carries your custom query parameters.
+
+## When This Pattern Breaks Down
+
+HMAC timestamp tokens aren't universal. Here's when to reach for something else:
+
+**Client-facing APIs.** You can't give end users your shared secret. HMAC timestamp tokens are for server-to-server communication where both sides hold the secret. For client-facing APIs, use OAuth, JWT, or API keys with proper rate limiting.
+
+**Multi-tenant services.** If Service B serves multiple callers with different permissions, a single shared secret can't distinguish between them. You'd need per-caller secrets, at which point you're building a key management system and should probably use JWT with scoped claims.
+
+**Audit requirements.** HMAC tokens are ephemeral — they leave no trace after expiration. If you need to audit who called what and when, you'll need to log the request details separately. The token itself doesn't carry identity information.
+
+**Clock synchronization issues.** If your services run on hardware with significant clock drift (more than a few seconds), the expiration window becomes unreliable. Cloud providers generally keep NTP-synced clocks within 1-2 milliseconds, but edge deployments or on-premise hardware might drift further. In those cases, JWT with longer expiration windows and explicit `iat` (issued-at) claims is more forgiving.
+
+## The Full Flow
+
+Here's the complete request lifecycle:
+
+```
+1. Browser sends GET /api/search?q=faucet to your main app
+
+2. Main app handler:
+   - Computes HMAC-SHA256(secret, expires_timestamp) → token
+   - Returns 307 redirect to:
+     https://service.example.com/search?q=faucet&lang=en&_token=abc...&_expires=17734944
+
+3. Browser follows redirect to service
+
+4. Service middleware pipeline:
+   a. CORS middleware → sets Access-Control-Allow-Origin, handles OPTIONS
+   b. Security middleware → logs source IP
+   c. Token auth middleware:
+      - Parses _token and _expires from query
+      - Checks: is _expires in the future? ✓
+      - Computes HMAC-SHA256(secret, _expires) → expected
+      - Compares: timingSafeEqual(token, expected) ✓
+      - Request passes to route handler
+
+5. Route handler executes (search, data processing, etc.)
+
+6. Response flows directly from service to browser
+   Main app uses zero memory — it only issued the redirect
+```
+
+The main app's involvement ends at step 2. It spends ~1ms computing the HMAC and returning a 307. The receiving service validates the token in ~0.5ms. Total overhead of the entire auth flow: under 2 milliseconds.
+
+## Key Takeaways
+
+1. **Shared secrets should never travel over the wire.** HMAC lets both sides prove knowledge of the secret without transmitting it. The token is derived from the secret, not the secret itself.
+
+2. **Time-limited tokens eliminate the replay problem.** A 10-second expiration window means captured tokens are worthless almost immediately. No revocation lists, no session stores, no cleanup jobs.
+
+3. **Always use constant-time comparison.** `timingSafeEqual` costs nothing and prevents timing attacks. There's no reason not to use it.
+
+4. **Sign what matters for your threat model.** For internal services over TLS, signing the timestamp alone is sufficient. For untrusted intermediaries, sign critical request parameters too.
+
+5. **Rotation is an environment variable change, not a migration.** No database updates, no token invalidation, no coordination beyond deploying the new secret.
+
+6. **This pattern pairs well with 307 redirects.** The main app handles authentication logic and gets out of the way. The receiving service validates the token and handles the actual work. Neither service touches the other's memory budget.
+
+The implementation is roughly 30 lines of code on each side. The cryptographic primitives are built into Node.js — no external dependencies. The pattern has been used in CDN token authentication, webhook verification, and API gateway signing for decades. We're not inventing anything new — just applying a well-tested pattern to a common microservices problem.
+
+Sometimes the best authentication system is the one with no state to manage.
