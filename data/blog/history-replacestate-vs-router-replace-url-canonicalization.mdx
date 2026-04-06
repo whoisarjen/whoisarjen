@@ -1,0 +1,315 @@
+---
+title: "Stop Using Router.replace() for URL Canonicalization — Use History.replaceState() Instead"
+date: 2026-04-06T09:00:00Z
+summary: "We were burning full Vue Router navigation cycles just to fix slug URLs on product pages. Replacing router.replace() with history.replaceState() eliminated wasted re-renders, fixed broken SEO meta tags, and cut client-side canonicalization to a single DOM-free call."
+tags: ['Vue.js', 'Performance', 'SEO', 'Nuxt', 'URL Canonicalization', 'SSR', 'Router']
+---
+
+## The URL That Renders Twice
+
+Every product in our e-commerce platform has a slug derived from its name. A kitchen faucet might live at `/product/corsa-gold-brushed-BEA_F53G`. But users also reach product pages through shorter URLs — `/product/BEA_F53G` — coming from QR codes on packaging, internal dashboards, or upstream inventory systems that only know the product code.
+
+When someone lands on `/product/BEA_F53G`, the page fetches product data from the API, discovers the full slug is `corsa-gold-brushed-BEA_F53G`, and needs to update the URL to reflect it. Same page, same product, same content — just a cleaner, SEO-friendly URL in the browser's address bar.
+
+For months, we handled this with Vue Router's `router.replace()`:
+
+```typescript
+watch(status, async (status) => {
+  if (status === 'success' && data.value) {
+    const slug = data.value.product.slug
+    const currentSlug = params.slug
+
+    if (!currentSlug?.includes('-') || currentSlug !== slug) {
+      router.replace({
+        path: localePath({
+          name: 'productDetail',
+          params: { slug },
+        }),
+      });
+    }
+  }
+}, { immediate: true });
+```
+
+This worked. The URL updated. The page showed the right product. Ship it, move on.
+
+Except we were paying for that URL update with an entire Vue Router navigation cycle.
+
+## What Router.replace() Actually Does
+
+When most developers hear "replace the URL without adding a history entry," they think of a lightweight DOM operation. The browser swaps one URL for another, life goes on. That's what `history.replaceState()` does.
+
+`router.replace()` does something fundamentally different. It triggers Vue Router's full navigation pipeline:
+
+1. **Navigation guards run.** Every `beforeEach`, `beforeResolve`, and component-level `beforeRouteUpdate` guard executes. In our case, that included i18n locale detection, authentication checks, and analytics middleware.
+2. **Route matching happens.** Vue Router re-parses the URL, matches it against the route table, extracts parameters, and resolves the route object. For a URL that points to the same page with a slightly different slug, this is wasted work.
+3. **Components re-evaluate.** Any `watch` on `route.params` fires. Computed properties that depend on route parameters recalculate. Components that use `useRoute()` may trigger re-renders.
+4. **The data fetch watcher fires again.** This was the expensive one. Our product page watched `status` to detect when data loaded successfully. After `router.replace()` updated the route, the watcher fired again because the params changed — even though we already had the data.
+
+For a URL canonicalization that changes `/product/BEA_F53G` to `/product/corsa-gold-brushed-BEA_F53G`, none of these steps are necessary. The page is already rendered. The data is already fetched. The component tree is correct. We just need the address bar to show a different string.
+
+We were using a full navigation to do the job of a string replacement.
+
+## The Problem Multiplied Across Page Types
+
+The product page wasn't the only place we used this pattern. We had the same `router.replace()` canonicalization on four different page types:
+
+| Page Type | Canonicalization Trigger | Router.replace() Count |
+|-----------|--------------------------|------------------------|
+| Product detail | Code-only slug to full name slug | Every product view from short URL |
+| Designer profile | ID-only slug to name-and-ID slug | Every designer view from legacy URL |
+| News article | Language-specific slug swap | Every article when locale slug differs |
+| Collection page | Language-specific slug swap | Every collection when locale slug differs |
+
+The content pages (news and collections) had an additional wrinkle. Our CMS stores content with per-language slugs. An article might have the slug `nowoczesne-baterie` in Polish but `modern-faucets` in English. When a user switches languages, the page fetches the same content but needs to update the URL to the locale-appropriate slug.
+
+We were handling this with a `watch` on the fetched data:
+
+```typescript
+watch(data, async (newData) => {
+  if (newData?.slug && newData.slug !== params.slug) {
+    await router.replace(localePath({
+      name: 'newsArticle',
+      params: { slug: newData.slug },
+    }));
+  }
+}, { deep: true, immediate: true });
+```
+
+The `deep: true` watcher on the entire data object meant any data change — not just a slug change — would trigger the comparison. And the `immediate: true` meant it ran on mount, during the initial render, before the page was even visible.
+
+On content pages with rich nested data structures, this watcher was evaluating on every reactive update to the data object. Most of the time, the slug matched and nothing happened. But the watcher still ran, still compared, still burned cycles.
+
+## The SEO Problem Nobody Noticed
+
+While we were focused on the performance cost of `router.replace()`, a more insidious problem was lurking in our SEO metadata.
+
+Our pages set canonical URLs and OpenGraph URLs using `useSeoMeta()`:
+
+```typescript
+useSeoMeta({
+  ogImage: () => `https://cdn.example.com${data.value?.product.mainPhoto?.fullpath}`,
+  twitterCard: 'summary_large_image',
+});
+```
+
+Notice what's missing? No explicit `ogUrl`. No canonical link tag. We relied on the browser's current URL to serve as the de facto canonical.
+
+Here's the problem: during SSR, the canonical URL was whatever the server received in the request. If Googlebot crawled `/product/BEA_F53G` (the short URL), the SSR response contained:
+
+- HTML rendered with data for the correct product
+- Meta tags generated from that data
+- **A URL in the address bar that was the short form**, not the canonical slug
+
+The `router.replace()` only runs on the client. During SSR, no navigation happens — the server renders once and sends HTML. Googlebot receives the page with the non-canonical URL baked into any URL-dependent meta tags. The client-side `router.replace()` fires after hydration, but by then, the SSR response has already been indexed with the wrong URL.
+
+This meant our product pages had inconsistent canonical signals:
+
+| Signal | Value During SSR | Value After Hydration |
+|--------|------------------|-----------------------|
+| URL bar | `/product/BEA_F53G` | `/product/corsa-gold-brushed-BEA_F53G` |
+| Canonical tag | None (absent) | None (still absent) |
+| og:url | None (absent) | None (still absent) |
+| Schema.org URL | `https://example.com/product/BEA_F53G` | `https://example.com/product/BEA_F53G` |
+
+No canonical tag, no og:url, and a Schema.org URL that pointed to the short form. We were sending Google mixed signals on every product that had been accessed via a short URL.
+
+## The Fix: One Line Instead of a Navigation Cycle
+
+The replacement is almost embarrassingly simple. Instead of asking Vue Router to navigate to a new URL, we tell the browser to display a different URL for the current page:
+
+```typescript
+if (import.meta.client && correctPath && route.path !== correctPath) {
+  window.history.replaceState(history.state, '', correctPath)
+}
+```
+
+That's it. One line. No navigation guards. No route matching. No component re-evaluation. No data re-fetching. The browser updates the address bar and nothing else happens.
+
+The `history.state` argument is critical — it preserves Vue Router's internal state object. If you pass `null` or `{}`, Vue Router loses track of the current navigation state, which can cause issues with back/forward navigation and scroll position restoration. By passing the existing `history.state`, we update the URL while keeping Vue Router's state intact.
+
+The `import.meta.client` guard ensures this code never runs during SSR. On the server, `window` doesn't exist, and we don't want to modify URLs during server rendering anyway. The canonical URL for SSR is handled separately through proper meta tags.
+
+## Fixing SEO With Explicit Canonicals
+
+With `router.replace()` gone, we needed a proper canonical URL strategy. Instead of relying on the browser's address bar (which we can't control during SSR), we explicitly set canonical URLs in the page's head:
+
+```typescript
+const canonicalPath = computed(() => {
+  if (!data.value) return null
+  return localePath({
+    name: 'productDetail',
+    params: { slug: data.value.product.slug }
+  })
+})
+
+useHead({
+  link: [
+    {
+      rel: 'canonical',
+      href: computed(() =>
+        canonicalPath.value
+          ? `${fullSitePath}${canonicalPath.value}`
+          : undefined
+      ),
+    },
+  ],
+})
+
+useSeoMeta({
+  ogUrl: () =>
+    canonicalPath.value
+      ? `${fullSitePath}${canonicalPath.value}`
+      : undefined,
+})
+```
+
+Now the canonical signals are consistent regardless of which URL the page was accessed through:
+
+| Signal | Value During SSR | Value After Hydration |
+|--------|------------------|-----------------------|
+| URL bar | `/product/BEA_F53G` | `/product/corsa-gold-brushed-BEA_F53G` |
+| Canonical tag | `/product/corsa-gold-brushed-BEA_F53G` | `/product/corsa-gold-brushed-BEA_F53G` |
+| og:url | `/product/corsa-gold-brushed-BEA_F53G` | `/product/corsa-gold-brushed-BEA_F53G` |
+| Schema.org URL | `/product/corsa-gold-brushed-BEA_F53G` | `/product/corsa-gold-brushed-BEA_F53G` |
+
+The canonical tag and og:url are computed from the API data, not from the current route. During SSR, the data is available (it's fetched server-side), so the canonical URL is correct in the initial HTML response. Googlebot sees the right canonical on the first render, before any client-side JavaScript runs.
+
+## The Content Page Pattern
+
+For content pages (news articles and collection pages), the pattern was slightly different because the slug swap can happen when the user switches languages, not just on initial load.
+
+The old approach used a `watch` with `deep: true` on the entire data object:
+
+```typescript
+watch(data, async (newData) => {
+  if (newData?.slug && newData.slug !== params.slug) {
+    await router.replace(localePath({
+      name: 'newsArticle',
+      params: { slug: newData.slug },
+    }));
+  }
+}, { deep: true, immediate: true });
+```
+
+The new approach splits the work into two parts — a computed canonical that's always correct, and a client-side URL update that only fires when needed:
+
+```typescript
+const routeName = variant === 'news' ? 'newsArticle' : 'collectionSlug'
+const canonicalPath = localePath({
+  name: routeName,
+  params: { slug: data.value.slug }
+})
+
+useHead({
+  link: [
+    {
+      rel: 'canonical',
+      href: `${fullSitePath}${canonicalPath}`,
+    },
+  ],
+})
+
+useSeoMeta({
+  ogUrl: `${fullSitePath}${canonicalPath}`,
+})
+
+if (import.meta.client && data.value.slug !== params.slug && route.path !== canonicalPath) {
+  window.history.replaceState(history.state, '', canonicalPath)
+}
+```
+
+The `deep: true` watcher is gone entirely. The computed canonical path derives from the data once. The `replaceState` call runs once on mount if the slug doesn't match. No reactive overhead, no repeated comparisons, no navigation pipeline.
+
+## What We Removed
+
+Across four page types, the refactor removed:
+
+| Removed | Count | Why It Matters |
+|---------|-------|----------------|
+| `router.replace()` calls | 4 | Each triggered full navigation cycle |
+| `useRouter()` imports | 3 | No longer needed (one file still used it elsewhere) |
+| `deep: true` data watchers | 2 | Eliminated unnecessary reactive tracking |
+| `async` watcher callbacks | 4 | `replaceState` is synchronous |
+
+And added:
+
+| Added | Count | Why It Matters |
+|-------|-------|----------------|
+| Explicit canonical link tags | 4 | SSR-correct canonical URLs |
+| Explicit og:url meta tags | 4 | Consistent social sharing URLs |
+| `history.replaceState()` calls | 4 | Lightweight URL updates |
+| `fullSitePath` config usage | 4 | Absolute canonical URLs |
+
+The net result is **4 fewer navigation cycles per page load** (when canonicalization triggers), **4 new canonical signals** that work correctly during SSR, and **zero additional DOM operations** beyond what the browser does natively with `replaceState`.
+
+## When to Use Each Approach
+
+The decision between `router.replace()` and `history.replaceState()` comes down to one question: **does the destination need a different component tree?**
+
+| Scenario | Use | Reason |
+|----------|-----|--------|
+| URL cosmetic fix (slug canonicalization) | `history.replaceState()` | Same page, same data, just a nicer URL |
+| Language switch on same content | `history.replaceState()` | Same component, different slug for same content |
+| Redirect to a different page | `router.replace()` | Different route, different component, different data |
+| Authentication redirect to login | `router.replace()` | Different page entirely |
+| Filter/sort state in URL | `history.replaceState()` | Same page, URL reflects UI state |
+| Step wizard with URL tracking | `router.replace()` | Different components per step |
+
+The rule is simple: if the component tree stays the same and you already have the data, `replaceState` is the right tool. If you need Vue Router to resolve a different route and mount different components, `router.replace()` is the right tool.
+
+## The replaceState Gotcha: Preserving Router State
+
+There's one mistake that's easy to make with `history.replaceState()` in a Vue Router application, and it's subtle enough that it won't show up in basic testing.
+
+```typescript
+// This looks reasonable but breaks back/forward navigation
+window.history.replaceState(null, '', correctPath)
+
+// This preserves Vue Router's internal tracking
+window.history.replaceState(history.state, '', correctPath)
+```
+
+Vue Router stores navigation metadata in `history.state` — the scroll position, the navigation direction, and internal tracking data that powers `router.back()` and `router.forward()`. If you replace the state with `null`, Vue Router loses its position in the navigation stack. The next time the user presses the back button, the behavior becomes unpredictable.
+
+By passing `history.state` as the first argument, we tell the browser: "update the URL, but keep everything else about this history entry the same." Vue Router continues to work correctly because its state object is preserved.
+
+We verified this by testing the following sequence: navigate to a product via short URL, confirm the URL updates to the canonical slug, press back, and confirm we return to the previous page — not a blank state or a duplicated history entry.
+
+## Why Not a Server-Side Redirect?
+
+Before settling on client-side `replaceState`, we considered handling canonicalization entirely on the server with 301 redirects. If someone requests `/product/BEA_F53G`, the server could look up the full slug and return a `301 Moved Permanently` to `/product/corsa-gold-brushed-BEA_F53G`.
+
+This would be the cleanest solution from an SEO perspective — Googlebot follows 301s and consolidates link equity to the canonical URL. But it has two significant costs in our architecture.
+
+First, it requires an additional database query before rendering. The server receives a request, looks up the product by code to get the full slug, decides whether to redirect, and if so, sends a 301. That lookup happens before the page renders. In the current flow, the page renders with whatever slug it receives, fetches the product data (which it needs anyway for the page content), and updates the URL client-side. The data fetch serves double duty — content rendering and slug resolution — instead of requiring a separate pre-render lookup.
+
+Second, 301 redirects don't work well with our SSR caching strategy. We cache rendered pages by their full URL path. A redirect from `/product/BEA_F53G` to `/product/corsa-gold-brushed-BEA_F53G` means the short URL is never cached as a rendered page — every request to the short URL hits the server, performs the lookup, and sends the redirect. For a high-traffic storefront where product codes appear on physical packaging and in downstream systems, that's a meaningful amount of redirect traffic that bypasses the cache entirely.
+
+The `replaceState` approach lets us cache both URL variants (they render the same page) while ensuring the canonical meta tags always point to the correct slug. It's not as theoretically pure as a server-side redirect, but it's more practical for our traffic patterns and infrastructure.
+
+## The Performance Argument, Honestly
+
+We should be candid about the performance impact. On a modern device with a fast connection, the difference between `router.replace()` and `history.replaceState()` is measured in single-digit milliseconds. You won't see it in Lighthouse scores. Users won't feel it.
+
+The argument for `replaceState` isn't about raw speed — it's about correctness and waste.
+
+**Correctness:** `router.replace()` for URL canonicalization was a semantic mismatch. We were telling Vue Router "navigate to this new location" when we meant "display this URL for the current location." The distinction matters for SSR, for SEO meta tags, for watchers that react to route changes, and for any middleware that runs on navigation.
+
+**Waste:** Every unnecessary navigation cycle is work that doesn't need to happen. Guards evaluate and return "proceed." Route matching resolves to the same component. Watchers fire and discover nothing changed. It's not slow — it's pointless. And pointless work has a way of accumulating. Four pages doing unnecessary navigations on every canonicalization. Multiply by the traffic volume of an e-commerce storefront. The aggregate CPU time spent re-evaluating guards and re-matching routes for cosmetic URL changes adds up, even if individual instances are negligible.
+
+The real win was the SEO fix. Explicit canonical tags and og:url that render correctly during SSR, regardless of which URL variant Googlebot crawls. That's not a performance optimization — it's a correctness fix that was impossible with the `router.replace()` approach.
+
+## What We Learned
+
+**Match the tool to the job.** `router.replace()` is for navigation. `history.replaceState()` is for URL cosmetics. Using a navigation API for a non-navigation task created side effects (guard execution, watcher triggers, re-renders) that we then had to work around.
+
+**SSR meta tags can't depend on client-side navigation.** Any SEO signal that matters needs to be correct in the server-rendered HTML. If your canonical URL strategy relies on client-side JavaScript running after hydration, Googlebot may never see it. Set canonicals from data, not from route state.
+
+**Deep watchers are a code smell for simple comparisons.** Watching an entire data object with `deep: true` to detect a slug change is like scanning every file in a directory to check if one file exists. A targeted comparison at the right moment replaces a reactive watcher that runs on every data mutation.
+
+**Preserve router state when modifying history.** Always pass `history.state` to `replaceState()` in a framework that manages the history stack. The browser doesn't care about your router's internal state, but your router does.
+
+The total diff was 91 additions and 53 deletions across four files. The most impactful change was a single line: `window.history.replaceState(history.state, '', correctPath)`. Everything else was adding the canonical tags we should have had from the start.
+
+Sometimes the best navigation is no navigation at all.

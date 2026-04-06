@@ -1,0 +1,186 @@
+---
+title: "We Replaced Redis With PostgreSQL for Caching — Here's What Happened"
+date: 2026-04-06T08:00:00Z
+summary: "Our Redis cache kept dropping TLS connections, taking down the entire caching layer. After a misleading benchmark nearly sent us in the wrong direction, we migrated to PostgreSQL — same performance, zero drops, one less service to manage."
+tags: ['Caching', 'PostgreSQL', 'Redis', 'Performance', 'Architecture', 'Serverless', 'Migration']
+---
+
+## The Setup Nobody Questions
+
+Redis is the default answer to "where should we cache things?" It's fast, battle-tested, and every framework has a driver for it. We used it exactly the way the documentation suggests — a managed DigitalOcean instance ($15/month) sitting between our four applications and the database, storing cached API responses, distributed locks, and cache invalidation signals.
+
+Our e-commerce platform runs four separate applications: a customer-facing storefront, a B2B API serving product catalogs, a data collector that syncs inventory from upstream systems, and a marketing site for our design studio. All four connected to the same Redis instance. Every API response got cached as compressed JSON with a three-day TTL. Distributed locks prevented concurrent cache rebuilds. Invalidation signals coordinated cache freshness across all four apps when product data changed upstream.
+
+For months, it worked exactly as expected. Response times were consistent, cache hit rates were high, and the $15/month felt like a bargain for the infrastructure simplification it provided.
+
+Then the TLS connections started dropping.
+
+## When Your Cache Becomes the Problem
+
+The first signs were subtle — occasional cache misses where there should have been hits. A few extra database queries during peak traffic. Nothing alarming until we checked the error logs.
+
+Redis connections were failing intermittently with TLS handshake errors. Not consistently, not predictably — just often enough to make the caching layer unreliable. During a bad window, all four applications would lose their cache simultaneously, hammering the database with queries that should have been served from Redis.
+
+The failure pattern was particularly insidious. When Redis dropped, every subsequent request became a cache miss. Each miss triggered a full database query and a cache write. Multiple concurrent cache writes competed for locks that were also stored in Redis. The system that was supposed to protect our database from traffic spikes was now causing traffic spikes.
+
+We spent two days trying to harden the Redis configuration:
+
+| Attempt | What We Changed | What Happened |
+|---------|----------------|---------------|
+| Disable offline queue | Fail fast instead of queuing requests | Faster failures, but still failing |
+| Zero retries per request | Prevent retry storms during outages | Same drops, just fewer retries per drop |
+| Explicit TLS configuration | Force TLS initialization (ioredis URL parsing bug) | Drops continued unchanged |
+| Connection keepAlive (10s) | Prevent idle connection expiry | Reverted same day — no improvement |
+
+Every change addressed a plausible root cause. None of them fixed the actual problem. The TLS drops were happening at the managed infrastructure level, somewhere between DigitalOcean's Redis service and our serverless hosting. We could configure our client however we wanted — the pipe itself was unreliable.
+
+After two days of config tweaking, we accepted the uncomfortable truth: **we couldn't fix Redis. We had to replace it.**
+
+## The Obvious Alternative (That Was Already Running)
+
+Our PostgreSQL database was hosted on Neon — a serverless Postgres provider we were already paying for. It handled all our application data: products, users, orders, translations, everything. It had never dropped a connection in months of production use.
+
+The question was simple: could PostgreSQL serve as a cache backend? Not for everything Redis does — we didn't need pub/sub or streams. Just three things:
+
+1. **Key-value storage** with TTL expiry (cached API responses)
+2. **Distributed locks** (prevent concurrent cache rebuilds)
+3. **Invalidation signals** (coordinate cache freshness across apps)
+
+All three are table operations. A cache entry is a row with a key, value, and expiry timestamp. A lock is an atomic insert. An invalidation signal is an upsert to a coordination table.
+
+The real question wasn't "can PostgreSQL do this?" — it was "can it do this fast enough?"
+
+## The Benchmark That Almost Misled Us
+
+Before migrating anything in production, we built a benchmark endpoint. It used real product catalog payloads — the same JSON objects our cache would actually store. We ran it against both Redis and our Neon PostgreSQL instance, comparing read and write latencies.
+
+The results looked promising:
+
+| Operation | Redis | PostgreSQL (Neon) | Difference |
+|-----------|-------|-------------------|------------|
+| Cache read (warm) | ~3ms | ~5ms | 1.6x slower |
+| Cache write (warm) | ~4ms | ~6ms | 1.5x slower |
+
+A 1.6x slowdown on cache reads? For a system that was intermittently failing entirely? That felt like a great trade-off. We deployed the PostgreSQL cache to our design studio app — the lowest-traffic application, our canary.
+
+**Production results within the first hour:**
+
+| Operation | Redis | PostgreSQL (Neon) | Difference |
+|-----------|-------|-------------------|------------|
+| Cache read (production) | ~60ms | ~400ms | 6.7x slower |
+
+We reverted within hours.
+
+The benchmark had been running with warm database connections — the Prisma ORM maintained a connection pool that was already established. In production on a serverless platform, every request could hit a cold connection. The ORM connection overhead, query parsing, and network round-trip to Neon's serverless endpoint added up to something dramatically slower than our controlled test suggested.
+
+**Lesson learned:** Warm-connection benchmarks on serverless are fiction. Your benchmark must replicate production conditions — cold connections, variable network latency, real concurrency patterns. A 3ms-vs-5ms difference in a controlled test told us nothing about the 60ms-vs-400ms reality.
+
+We almost gave up on the PostgreSQL approach entirely. But then we looked more carefully at what we were actually caching, and realized not all cache operations are created equal.
+
+## Splitting the Problem in Two
+
+Our Redis usage fell into two distinct categories with very different access patterns:
+
+**Category 1: Invalidation signals.** Small writes (a single timestamp), infrequent (triggered by upstream data syncs), read by all apps to decide if cached data is stale. This is database-shaped work — small rows, indexed lookups, transactional guarantees matter more than raw speed.
+
+**Category 2: Cached API responses.** Large JSON blobs (50KB-2MB), written on cache miss, read on every request. This is where Redis traditionally excels — fast key-value lookups with minimal overhead.
+
+The 400ms production latency was dominated by Category 2 — large value reads through Prisma ORM with cold connections. But Category 1 was tiny data that our database could handle without breaking a sweat.
+
+So we split the migration into two phases.
+
+**Phase 1: Move invalidation signals to PostgreSQL.** We already had a Synchronization table in our database for tracking data sync timestamps. Invalidation signals — "products changed, bust the cache" — fit naturally into this table. A single database upsert replaced a Redis write that previously needed five retries to guarantee delivery.
+
+The improvement was immediate and measurable. Our data collector had been running retry loops because Redis writes during TLS drops would silently fail, leaving apps serving stale data indefinitely. With PostgreSQL, the write either succeeded (and it always did) or threw an error that we could handle. One write. One round trip. 100% delivery guarantee.
+
+**Phase 2: Move cached responses to PostgreSQL.** This was the part that had failed at 400ms. But after phase 1, we understood the problem better. The solution was a dedicated Cache table optimized for primary-key lookups:
+
+- Key: the cache key (string, primary key)
+- Value: the cached JSON (text)
+- Expiry: optional timestamp (indexed for cleanup queries)
+
+Primary-key lookups on PostgreSQL are fast — indexed, single-row fetches. The 400ms we'd seen in our first attempt was Prisma connection overhead on cold starts, not the query itself. For subsequent requests within the same serverless instance, reads were consistently under 10ms.
+
+## The Day We Pulled the Trigger
+
+March 27, 2026. All four applications migrated to PostgreSQL caching in a single day, deployed one at a time from lowest to highest risk:
+
+```
+1. Collector app (data sync)     ─ lowest risk, no user traffic
+2. B2B API (external clients)    ─ isolated, own caching layer
+3. Design studio (marketing)     ─ low traffic, already tested
+4. Main storefront (everything)  ─ highest risk, deployed last
+```
+
+The design studio was our most dramatic moment. We deployed, monitored for issues, saw something unexpected in the logs, reverted within minutes, identified the problem, fixed it, and redeployed successfully — all within five hours. The ability to revert instantly made the aggressive timeline possible. Each app was an independent deployment with its own cache configuration. If one failed, the others kept running.
+
+During the migration, we made three simplifications that we hadn't originally planned:
+
+**Dropped gzip compression entirely.** We had previously spent significant effort building a compression layer for Redis — gzip encoding every cached response to fit more entries into our 1GB memory limit. With PostgreSQL, storage isn't memory-constrained. Raw JSON stored as text. The PostgreSQL wire protocol handles its own compression during transit. We deleted the compression code, the decompression code, the base64 encoding, and the error handling for all of it.
+
+**Consolidated four utility files into one shared package.** Each app had its own copy of Redis utility functions — safe wrappers for get, set, lock, and unlock operations with error handling and retry logic. We replaced all four with a single set of helper functions in our shared database package. Same functions, one location, consistent behavior.
+
+**Removed all Redis configuration.** Connection URLs, TLS settings, timeout values, retry policies, offline queue settings, keepAlive intervals — every line of Redis configuration disappeared from every application config file.
+
+After the main storefront deployed successfully, we added one more optimization: endpoints that serve relatively static data (product filters, available finishes, installation zones) now skip the invalidation signal check entirely and rely purely on TTL expiry. This saves one database query per request for these endpoints — they refresh daily regardless of upstream changes.
+
+## The Numbers That Actually Matter
+
+After ten days in production with all four applications running on PostgreSQL caching:
+
+| Metric | Redis (Before) | PostgreSQL (After) | Impact |
+|--------|---------------|-------------------|--------|
+| API endpoint response time | 130-160ms | 130-160ms | No change |
+| SSR page render time | Consistent | Consistent | No change |
+| Cache read latency (warm) | ~3ms | ~5ms | +2ms (irrelevant at page level) |
+| TLS connection drops | Intermittent (weekly) | Zero | Eliminated |
+| Invalidation signal delivery | ~95% (retries needed) | 100% | Guaranteed |
+| Monthly infrastructure cost | $15 | $0 (existing database) | -$15/month |
+| Cache utility files | 4 (one per app) | 1 (shared package) | -75% code |
+| Compression CPU overhead | 3-5ms per read/write | 0ms | Eliminated |
+| Total migration time | — | 3 days (1 day active) | — |
+
+The headline isn't the $15/month savings — that's a rounding error. The headline is **zero TLS drops** and **100% invalidation delivery**.
+
+Before the migration, we'd been living with a caching layer that intermittently vanished, leaving all four applications to query the database directly. We'd built retry logic, graceful degradation, connection hardening — layers of complexity to work around an unreliable dependency. All of that complexity is now deleted.
+
+The 2ms increase in warm cache reads is technically measurable but practically invisible. A page that takes 130ms to render doesn't feel different at 132ms. And the 2ms is only relevant for warm connections — for cold serverless starts, the difference between Redis and PostgreSQL connection establishment is a wash.
+
+## What We Should Have Done Differently
+
+**Don't benchmark with warm connections on serverless.** Our initial benchmark gave us false confidence, leading to a production failure that cost us hours of debugging and a revert. If we'd tested with cold connections from the start, we would have identified the ORM overhead issue immediately and designed around it.
+
+**Migrate signals before storage.** The invalidation signals were a clean, low-risk migration that delivered immediate reliability improvements. We should have moved them months earlier — they had nothing to do with the cache storage question and would have solved our worst reliability issue (silent invalidation failures) independently.
+
+**Don't harden a service you're about to remove.** We spent two days tweaking Redis configuration parameters that we later deleted entirely. That time would have been better spent on the migration plan. The sunk cost of debugging a failing service can delay the decision to replace it.
+
+**Question your optimizations.** We'd previously invested significant effort in cache compression — building, testing, and maintaining gzip encoding to fit more entries into Redis's memory-constrained storage. When we moved to PostgreSQL, we dropped compression entirely. The optimization was specific to Redis's memory model. Different storage, different constraints, different answers.
+
+## When This Approach Makes Sense
+
+PostgreSQL-as-cache works well when:
+
+- **Your database is already provisioned.** The marginal cost of a Cache table in an existing database is effectively zero. No new service to manage, monitor, or pay for.
+- **Your cached data is JSON.** PostgreSQL stores and retrieves text efficiently. Primary-key lookups on a text column are fast.
+- **Reliability matters more than raw speed.** If your alternative is "sometimes 3ms, sometimes completely down," then "consistently 5ms" is a significant upgrade.
+- **You're on serverless.** Connection pooling differences between Redis and PostgreSQL matter less on serverless than on persistent servers, because both face cold-start overhead.
+
+PostgreSQL-as-cache is a poor fit when:
+
+- **Sub-millisecond latency is a hard requirement.** Redis is genuinely faster for hot-path lookups. If your application can't tolerate 5ms cache reads, PostgreSQL isn't the answer.
+- **You need pub/sub or real-time features.** Redis Pub/Sub, Streams, and Sorted Sets are purpose-built data structures. PostgreSQL can approximate some of these, but not efficiently.
+- **Write volume is extremely high.** Thousands of cache writes per second will stress a PostgreSQL instance differently than Redis. For write-heavy caching, Redis's in-memory model has clear advantages.
+
+## The Question Nobody Asks
+
+The conversation about caching backends usually starts with "which one is faster?" That's the wrong question for most teams.
+
+The right question is: **"Is it fast enough, and will it be there when I need it?"**
+
+Redis is faster. Nobody disputes that. But for our workload — API responses cached as JSON, read a few thousand times per day, refreshed on upstream data changes — the difference between 3ms and 5ms is invisible to every user and irrelevant to every business metric.
+
+What wasn't invisible was the caching layer disappearing entirely during TLS drops. What wasn't irrelevant was silent invalidation failures leaving clients with stale product data. What wasn't acceptable was building layers of retry logic and graceful degradation to compensate for infrastructure unreliability.
+
+We replaced all of that with a table in our existing database. Same performance where it matters. Perfect reliability where it didn't exist before. One less service in our architecture diagram.
+
+Sometimes the best caching solution isn't the fastest one — it's the one that's actually there when you need it.

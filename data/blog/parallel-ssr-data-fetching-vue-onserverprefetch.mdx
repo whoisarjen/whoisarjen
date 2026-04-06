@@ -1,0 +1,425 @@
+---
+title: "We Removed One Line of Code and Our SSR Got 3x Faster"
+date: 2026-04-06T12:00:00Z
+summary: "How a single inline await in our Vue composable was silently serializing all data fetching during server-side rendering, and how onServerPrefetch fixed it with zero architectural changes."
+tags: ['Vue', 'SSR', 'Performance', 'Nuxt', 'TanStack Query', 'TypeScript', 'Optimization']
+---
+
+## The Page That Took 900ms to Render
+
+We had a product page that made three API calls during server-side rendering: product details, related products, and global navigation data. Each call took roughly 150ms. Simple math says 450ms total if they run in parallel.
+
+Our server logs said 900ms.
+
+Not occasionally. Consistently. Every single SSR render of our product page waited for each API call to complete before starting the next one. Three independent data fetches, executed in strict sequence, because of a single line of code buried in a composable that every query in the application flowed through.
+
+We found the line, deleted it, and every page on both of our applications got faster. No new libraries. No architecture redesign. No trade-offs. Just one line of code that was preventing Vue's built-in parallelism from doing its job.
+
+## How We Built the Data Fetching Layer
+
+Our e-commerce platform uses TanStack Query (Vue) for all data fetching. Every component that needs server data calls a composable called `useCustomQuery`, which wraps TanStack's `useQuery` with our conventions: cookie forwarding for SSR auth, locale injection, Zod schema validation, and error handling.
+
+The composable signature looked like this:
+
+```typescript
+export const useCustomQuery = async <T = unknown>(
+  url: NitroFetchRequest,
+  queryRaw: Ref<object> | undefined,
+  queryOptions: QueryOptions<T> | undefined,
+  schema: z.Schema<object> | undefined,
+) => {
+  // ... setup code ...
+
+  const response = useQuery<T, QueryError>({
+    queryKey: queryKey.value,
+    queryFn: ({ signal }) => {
+      return $fetch<T>(url, {
+        method: 'get',
+        signal,
+        headers: useRequestHeaders(['cookie']),
+        query: { ...query?.value ?? {}, lang: locale.value },
+      })
+    },
+    ...queryOptions,
+    enabled: isEnabled,
+  })
+
+  // THE LINE
+  if (!queryOptions?.lazy && isEnabled.value) {
+    await response.suspense()
+  }
+
+  // ... return response ...
+}
+```
+
+That `await response.suspense()` call is the culprit. But to understand why it causes sequential execution, we need to understand how Vue's SSR renderer actually works.
+
+## How Vue SSR Renders a Component
+
+Vue's server-side renderer processes each component through a specific lifecycle. The part relevant to data fetching is the `onServerPrefetch` hook -- a lifecycle hook that only runs during SSR, designed specifically for data loading before the component's HTML is generated.
+
+Here is the key insight: **Vue's SSR renderer collects all `onServerPrefetch` hooks registered within a single component and runs them with `Promise.all`**. This means if a component registers three `onServerPrefetch` callbacks, all three start executing simultaneously. The renderer waits for all of them to resolve, then continues rendering the component's template with the fetched data.
+
+TanStack Query's Vue integration automatically registers an `onServerPrefetch` hook for each `useQuery` call. When you create a query, TanStack registers a prefetch hook that calls `suspense()` on the query -- the same method that resolves when the query's data is available. This happens internally, without any explicit code from you.
+
+So in theory, if a component has three `useQuery` calls, TanStack registers three `onServerPrefetch` hooks, Vue collects them, and `Promise.all` runs all three fetches concurrently.
+
+In theory.
+
+## Why await Broke Everything
+
+Our `useCustomQuery` composable was `async`. The `await response.suspense()` call sat right in the middle of the setup function. Here is what happened when a component used two queries:
+
+```typescript
+// Inside a Vue component's <script setup>
+const { data: banners } = await useBanners(bannersParams)
+const { data: globalData } = await useGlobal()
+```
+
+Because `useBanners` is `async` and contains `await response.suspense()`, the component's setup function pauses at the first `await`. The banners query starts fetching. The entire setup function suspends until the banners response comes back. Only then does execution continue to the second line, where `useGlobal()` starts its fetch.
+
+The `onServerPrefetch` hooks that TanStack registered for these queries are irrelevant -- by the time Vue's renderer gets to collect and run them, the data is already fetched. The inline `await` pre-empted the parallel mechanism entirely.
+
+Here is the execution timeline with the inline await:
+
+```
+Time 0ms:    useBanners() called, starts fetch
+Time 0ms:    Setup function suspends (await)
+Time 150ms:  Banners response arrives
+Time 150ms:  Setup function resumes
+Time 150ms:  useGlobal() called, starts fetch
+Time 150ms:  Setup function suspends (await)
+Time 300ms:  Global data response arrives
+Time 300ms:  Setup function resumes
+Time 300ms:  onServerPrefetch hooks run (nothing to do, data already fetched)
+Time 300ms:  Template renders
+```
+
+And here is what happens without it -- when queries defer to `onServerPrefetch`:
+
+```
+Time 0ms:    useBanners() called, query created (no await, returns immediately)
+Time 0ms:    useGlobal() called, query created (no await, returns immediately)
+Time 0ms:    Setup function completes
+Time 0ms:    Vue collects onServerPrefetch hooks
+Time 0ms:    Promise.all([bannersSuspense(), globalSuspense()]) starts
+Time 0ms:    Both fetches running in parallel
+Time 150ms:  Both responses arrive (parallel, not sequential)
+Time 150ms:  Template renders
+```
+
+The difference: 300ms vs 150ms for two queries. For pages with three or four queries, the savings multiply.
+
+## The "lazy" Escape Hatch We Were Already Using
+
+We actually knew about this problem, in a way. Our `QueryOptions` type had a `lazy` property:
+
+```typescript
+export type QueryOptions<TQueryFnData = unknown, TError = QueryError, TData = TQueryFnData> =
+  Omit<UseQueryOptions<TQueryFnData, TError, TData>, 'queryKey' | 'queryFn'> & {
+    lazy?: boolean;
+    enabled?: boolean | Ref<boolean> | ComputedRef<boolean>;
+    // ... other options
+  };
+```
+
+When `lazy` was `true`, the composable skipped the `await response.suspense()` call, letting the query defer to `onServerPrefetch` for parallel execution.
+
+The problem was that `lazy` defaulted to `false`. Every query was sequential by default, and developers had to explicitly opt in to parallel execution by passing a configuration flag. Over time, we had accumulated 46 call sites across both applications, and most of them had been retrofitted with the `lazy: true` flag after performance investigations revealed the sequential bottleneck.
+
+The code looked like this across our codebase:
+
+```typescript
+// Pattern we saw everywhere -- 46 times
+const { data, status } = await useBanners(bannersParams, {
+  lazy: true,
+})
+
+const { data: catalogues, status } = await useCatalogues({
+  lazy: true,
+})
+
+const { data, status } = await useCollections({
+  lazy: true,
+})
+```
+
+Every single call site was passing `lazy: true`. The "non-lazy" default was never actually wanted. We had a flag that every consumer needed to set, with no case where the default behavior was correct.
+
+## The Fix: Four Lines Deleted
+
+The fix was removing the `await response.suspense()` block entirely from `useCustomQuery`, along with the `lazy` property from the `QueryOptions` type.
+
+Before:
+
+```typescript
+export type QueryOptions<TQueryFnData = unknown, TError = QueryError, TData = TQueryFnData> =
+  Omit<UseQueryOptions<TQueryFnData, TError, TData>, 'queryKey' | 'queryFn'> & {
+    lazy?: boolean;
+    enabled?: boolean | Ref<boolean> | ComputedRef<boolean>;
+    select?: (data: TQueryFnData) => TData;
+    // ...
+  };
+
+// Inside useCustomQuery:
+if (!queryOptions?.lazy && isEnabled.value) {
+  await response.suspense()
+}
+```
+
+After:
+
+```typescript
+export type QueryOptions<TQueryFnData = unknown, TError = QueryError, TData = TQueryFnData> =
+  Omit<UseQueryOptions<TQueryFnData, TError, TData>, 'queryKey' | 'queryFn'> & {
+    enabled?: boolean | Ref<boolean> | ComputedRef<boolean>;
+    select?: (data: TQueryFnData) => TData;
+    // ...
+  };
+
+// The await block is gone. onServerPrefetch handles SSR data fetching.
+```
+
+Then we cleaned up all 46 call sites, removing the now-unnecessary `lazy: true` option:
+
+```typescript
+// Before
+const { data, status } = await useBanners(bannersParams, {
+  lazy: true,
+})
+
+// After
+const { data, status } = await useBanners(bannersParams)
+```
+
+The `onServerPrefetch` hook that was already registered inside the composable took over all SSR data fetching:
+
+```typescript
+onServerPrefetch(async () => {
+  if (isEnabled.value) {
+    await response.suspense()
+    await throwIfPageError(response.error.value)
+    if (response.data.value && queryOptions?.onSuccess) {
+      await nuxtApp.runWithContext(() => queryOptions.onSuccess!(response.data.value as T))
+    }
+  }
+})
+```
+
+This hook was already there. It was already doing the right thing -- calling `suspense()` and handling errors and success callbacks during SSR. The inline `await` was just racing it to the finish line and winning every time, preventing the hook from ever running in the parallel `Promise.all` batch.
+
+## What About the await on the Call Site?
+
+You might notice that the call sites still use `await`:
+
+```typescript
+const { data, status } = await useBanners(bannersParams)
+```
+
+The composable is still an `async` function -- it returns a Promise. But now that the `await response.suspense()` is gone, the only async work inside the composable is setup (creating the query, registering hooks). The `await` at the call site resolves almost instantly because no network request is being awaited inline.
+
+The actual data fetching happens later, when Vue's SSR renderer runs all the collected `onServerPrefetch` hooks in parallel via `Promise.all`.
+
+This distinction matters: the `await` on the composable is for synchronous-like setup ordering. The `onServerPrefetch` hook is for actual async data loading. Mixing the two -- by putting network requests in the async setup path -- defeats the parallelism.
+
+## The Results Across 46 Call Sites
+
+The change touched 46 files across both applications: the main e-commerce storefront and a secondary marketing site. Here is how the page types broke down:
+
+| Page Type | Queries Per Page | Before (Sequential) | After (Parallel) | Savings |
+|-----------|-----------------|--------------------|-----------------| --------|
+| Homepage | 2 | ~300ms | ~150ms | 50% |
+| Product page | 3 | ~450ms | ~150ms | 67% |
+| Collections listing | 2 | ~300ms | ~150ms | 50% |
+| Collection landing | 1 | ~150ms | ~150ms | 0% |
+| Search results | 2 | ~300ms | ~150ms | 50% |
+| Category page | 2 | ~300ms | ~150ms | 50% |
+| News article | 2 | ~300ms | ~150ms | 50% |
+| Dashboard pages | 1-2 | ~150-300ms | ~150ms | 0-50% |
+
+Pages with a single query saw no change -- there is nothing to parallelize. Pages with two queries cut their data-fetching time roughly in half. The product page, with three queries, saw the most dramatic improvement.
+
+The total diff was net negative: 41 lines added, 114 lines removed. We deleted more code than we wrote. The `lazy` option, its type definition, the conditional `await` block, and 46 instances of `lazy: true` across both apps -- all gone.
+
+## Why We Kept onServerPrefetch Instead of Other Approaches
+
+Vue offers several ways to fetch data during SSR. Here is why `onServerPrefetch` was the right choice for us, and why the alternatives fell short.
+
+### useAsyncData (Nuxt built-in)
+
+Nuxt's `useAsyncData` handles SSR data fetching and hydration automatically. But it duplicates what TanStack Query already does -- caching, deduplication, background refetching, cache invalidation. Using both would mean maintaining two caching layers with different invalidation strategies. We chose TanStack Query for its cache management and stuck with it.
+
+### Manual Promise.all in setup
+
+We could have collected all query promises manually and awaited them together:
+
+```typescript
+// This works but is fragile
+const [banners, global] = await Promise.all([
+  useBanners(params),
+  useGlobal(),
+])
+```
+
+This approach forces every component to know which queries can run in parallel. It breaks composition -- if a child composable adds a new query, you have to update the parent's `Promise.all` array. And it does not work across component boundaries.
+
+### onServerPrefetch (what we chose)
+
+The `onServerPrefetch` approach requires zero coordination between queries. Each composable registers its own hook independently. Vue collects all hooks from the component and runs them in parallel automatically. Adding a new query to a component does not require changing any existing code. Removing a query does not leave a gap in a `Promise.all` array.
+
+The key advantage: **parallelism is automatic and compositional**. No query knows or cares about other queries in the same component.
+
+## The Subtlety of Cross-Component Boundaries
+
+There is an important nuance: `Promise.all` only applies to `onServerPrefetch` hooks **within the same component**. If parent and child components both have prefetch hooks, the parent's hooks run first, then the child's hooks run after the parent's template is evaluated.
+
+This means the following layout does NOT parallelize across components:
+
+```vue
+<!-- Parent.vue -->
+<script setup>
+const { data: nav } = await useNavigation()  // Hook registered in Parent
+</script>
+
+<template>
+  <ChildComponent />  <!-- Child's hooks run after Parent renders -->
+</template>
+```
+
+```vue
+<!-- ChildComponent.vue -->
+<script setup>
+const { data: products } = await useProducts()  // Hook registered in Child
+</script>
+```
+
+The navigation query and the products query run sequentially -- not because of our code, but because Vue renders components top-down. The parent must finish before the child even starts.
+
+To get true parallelism, both queries need to be in the same component (or the same composable called from the same component). This is why our homepage had both queries at the same level:
+
+```typescript
+// Both in the same component's setup
+const { data, status } = await useBanners(bannersParams)
+const { collections, news } = await useGlobal()
+```
+
+After our fix, both queries' `onServerPrefetch` hooks run in the same `Promise.all` batch because they are registered in the same component.
+
+## A Trap for TanStack Query Users on Vue SSR
+
+If you are using TanStack Query with Vue SSR (whether through Nuxt or a custom setup), here is the pattern to watch for.
+
+The dangerous pattern:
+
+```typescript
+// composable that wraps useQuery
+export const useMyQuery = async (params) => {
+  const response = useQuery({
+    queryKey: ['my-data'],
+    queryFn: () => fetchData(params),
+  })
+
+  // THIS LINE KILLS PARALLELISM
+  await response.suspense()
+
+  return response
+}
+```
+
+The safe pattern:
+
+```typescript
+export const useMyQuery = async (params) => {
+  const response = useQuery({
+    queryKey: ['my-data'],
+    queryFn: () => fetchData(params),
+  })
+
+  // Let onServerPrefetch handle SSR data loading
+  onServerPrefetch(async () => {
+    await response.suspense()
+  })
+
+  return response
+}
+```
+
+The difference is where `suspense()` gets awaited. In the dangerous pattern, it blocks the setup function. In the safe pattern, it defers to `onServerPrefetch`, where Vue can batch it with other queries from the same component.
+
+TanStack Query actually registers its own `onServerPrefetch` hook internally. If you are not calling `suspense()` in your composable wrapper at all, TanStack's built-in hook will handle it. Our explicit `onServerPrefetch` hook gives us control over error handling and success callbacks, but the basic mechanism works out of the box.
+
+## The useQueries Alternative
+
+For components that always fetch the same set of queries together, TanStack's `useQueries` (plural) provides another path to parallelism. We use this for our product grid, which fetches products, finishes, filters, and zones simultaneously:
+
+```typescript
+const response = useQueries({
+  queries: [
+    {
+      queryKey: products.queryKey.value,
+      queryFn: () => fetchProducts(),
+      suspense: true,
+    },
+    {
+      queryKey: finishes.queryKey.value,
+      queryFn: () => fetchFinishes(),
+      suspense: true,
+      enabled: !!options?.isProductsFinishes,
+    },
+    {
+      queryKey: filters.queryKey.value,
+      queryFn: () => fetchFilters(),
+      suspense: true,
+      enabled: !!options?.isProductsFilters,
+    },
+  ]
+})
+
+onServerPrefetch(async () => {
+  await queryClient.prefetchQuery(productsQuery.value)
+})
+```
+
+`useQueries` runs all enabled queries concurrently within a single composable. Combined with `onServerPrefetch`, this gives you parallel execution both at the TanStack level (multiple queries in one hook) and at the Vue level (multiple hooks in one component).
+
+## What We Learned
+
+### Default behaviors accumulate silently
+
+The `lazy: false` default seemed reasonable when we wrote the composable. "Most queries need their data during SSR, so await by default." But the default created a performance cliff that was invisible unless you profiled SSR timings. By the time we noticed, 46 call sites were affected, and every developer had learned to add `lazy: true` without questioning why the default existed.
+
+If every consumer overrides a default, the default is wrong.
+
+### Framework primitives beat custom solutions
+
+We built a `lazy` flag to opt in to behavior that Vue already provides for free through `onServerPrefetch`. The framework had the right abstraction -- we just routed around it with an inline `await`. Removing our custom solution and letting the framework do its job was both simpler and more correct.
+
+### Composition requires non-blocking setup
+
+Vue's Composition API is built around the idea that composables register effects, watchers, and lifecycle hooks during setup, then the framework coordinates their execution. When you `await` a network request in setup, you break this coordination. The setup function becomes a sequential script instead of a declarative registration of behaviors.
+
+This applies beyond data fetching. Any `await` in setup that blocks on external I/O prevents downstream composables and hooks from registering until the I/O completes. Keep setup synchronous (or near-synchronous), and let lifecycle hooks handle the async work.
+
+### Measure SSR, not just client performance
+
+We had extensive client-side performance monitoring. Lighthouse scores, Core Web Vitals, time-to-interactive -- all tracked and optimized. But our SSR render times were a blind spot. The sequential fetching added 150-300ms to every server render, which directly impacted Time to First Byte. We only discovered it when we started logging SSR timings per page.
+
+If you are running SSR, your server render time is the floor for your TTFB. Optimizing client-side paint while ignoring server-side data fetching is optimizing the wrong half.
+
+## The Change in Numbers
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Lines of code | +114 (lazy flags, await block) | -73 net deletion |
+| Files changed | 0 | 46 (one-time cleanup) |
+| SSR data fetch time (2 queries) | ~300ms | ~150ms |
+| SSR data fetch time (3 queries) | ~450ms | ~150ms |
+| Configuration required per query | `lazy: true` | None |
+| Parallel execution | Opt-in | Default |
+
+The most important row is the last one. Parallel SSR data fetching went from something you had to remember and configure on every query to something that happens automatically, for every query, in every component, across both applications.
+
+---
+
+_Forty-six files changed, seventy-three lines deleted, and the fastest code we ever shipped was the code we removed._

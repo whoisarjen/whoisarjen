@@ -1,0 +1,306 @@
+---
+title: "How We Shaved 22KB Off Our Entry Bundle by Lazy-Loading a Toast Library"
+date: 2026-04-06T13:00:00Z
+summary: "vue3-toastify was shipping in the entry chunk of every single page — including those that never show a toast. A dynamic import composable moved it to a separate chunk that loads on first trigger, cutting 22KB from entry.js and 9KB from entry.css."
+tags: ['Performance', 'Vue', 'Nuxt', 'Bundle Optimization', 'Dynamic Import', 'TypeScript', 'Web Vitals']
+---
+
+## The Number That Shouldn't Be There
+
+We were reviewing our production bundle analysis when a familiar library name caught our eye in the entry chunk: `vue3-toastify`. Not in a route-specific chunk. Not in a lazy-loaded module. In the entry bundle — the JavaScript file that every single visitor downloads on every single page load, before they see anything at all.
+
+The entry chunk weighed 604 KB. That's the tax every visitor pays regardless of which page they land on. Search engine crawlers, first-time visitors on mobile networks, returning customers on fiber — all of them download 604 KB of JavaScript before the application can even hydrate.
+
+vue3-toastify accounted for 22 KB of that entry chunk. Its CSS added another 9 KB to the entry stylesheet, bringing entry.css from 109 KB to 118 KB. Combined, that's 31 KB of assets downloaded by every visitor for a feature that only triggers inside the dashboard — an admin panel used by a handful of internal users.
+
+Thirty-one kilobytes sounds small. But entry bundle weight compounds in ways that route-specific bundles don't:
+
+- It blocks initial render on every page
+- It's downloaded by every visitor, not just those who need it
+- It contributes to Total Blocking Time, which affects Core Web Vitals
+- On a 3G connection (still common in many markets), 31 KB adds roughly 200ms to first paint
+
+The storefront — product pages, category browsers, the checkout flow — never shows a toast notification. Not one. Toasts only appear in dashboard mutation callbacks: "User updated!", "Cache reset!", "Article created!" A feature used by 0.1% of our traffic was embedded in the critical path for 100% of it.
+
+## Finding the Culprit
+
+The discovery happened during a routine bundle review. We use Vite's built-in `rollup-plugin-visualizer` (or you can run `npx nuxi analyze`) to generate treemap visualizations of production output. The treemap showed vue3-toastify as a solid block inside the entry chunk, wedged between the Vue runtime and our router setup. Not in a lazy chunk. Not code-split by route. Right there in the critical path, loaded before a single pixel paints.
+
+We checked whether Nuxt's chunk splitting should have caught this automatically. In theory, if a module is only imported by route-specific pages, Nuxt's code splitting would place it in the corresponding route chunk. But vue3-toastify was imported in a plugin (which runs at startup) and in eleven different components spread across multiple routes. The bundler's chunk splitting heuristic saw a module referenced everywhere and made the rational decision: put it in the shared entry chunk to avoid downloading it eleven times.
+
+The irony is that the bundler was optimizing for the wrong scenario. It was minimizing total download size across all possible navigation paths. But for any single user session — especially the 99.9% of sessions that never visit the dashboard — it was maximizing unnecessary download. The optimization algorithm assumed every user would eventually visit every route. In reality, storefront visitors never visit the dashboard, and dashboard users are a tiny fraction of total traffic.
+
+## How It Got There
+
+The culprit was a standard Nuxt plugin. When we first added toast notifications, we followed the library's recommended setup:
+
+```typescript
+// plugins/toast.ts
+import Vue3Toastify, { type ToastContainerOptions } from 'vue3-toastify';
+import 'vue3-toastify/dist/index.css';
+
+export default defineNuxtPlugin((nuxt) => {
+  nuxt.vueApp.use(
+    Vue3Toastify,
+    {
+      autoClose: 2000,
+      position: 'bottom-right',
+      limit: 5,
+    } as ToastContainerOptions
+  )
+})
+```
+
+Two lines did the damage. `import Vue3Toastify from 'vue3-toastify'` pulled the entire library into the module graph at build time. `import 'vue3-toastify/dist/index.css'` did the same for the stylesheet. Because Nuxt plugins execute during app initialization, the bundler correctly determined these imports were needed at startup and placed them in the entry chunk.
+
+Then, across the codebase, eleven components and pages imported the `toast` function directly:
+
+```typescript
+import { toast } from 'vue3-toastify';
+
+// Used in mutation callbacks
+const { mutate } = useMutation({
+  mutationFn: (body) => $fetch('/api/endpoint', { method: 'POST', body }),
+  onSuccess() {
+    toast.success("Record updated!")
+  },
+  onError() {
+    toast.error("Something went wrong!")
+  },
+})
+```
+
+Each of those `import { toast }` statements reinforced the bundler's decision: vue3-toastify is used across many modules, so it belongs in the shared entry chunk. The bundler was doing exactly what it was designed to do — putting frequently-referenced code in the common chunk to avoid duplication. The problem wasn't the bundler. The problem was that we were importing a runtime dependency at the module level instead of loading it on demand.
+
+## Why the Obvious Fixes Don't Work
+
+Before building the lazy composable, we considered three simpler approaches. Each had a disqualifying flaw.
+
+**Approach 1: Client-only plugin.** Nuxt lets you suffix a plugin file with `.client.ts` to skip it during SSR. This would prevent the server from bundling vue3-toastify, but it wouldn't help the client bundle at all. The client entry chunk would still contain the full library. The problem wasn't SSR overhead — it was client-side download weight.
+
+**Approach 2: `defineNuxtPlugin` with conditional import.** We considered wrapping the import in a route check — only load the library if the user is on a dashboard page:
+
+```typescript
+export default defineNuxtPlugin((nuxt) => {
+  const route = useRoute()
+  if (route.path.startsWith('/panel')) {
+    // Load toast only for dashboard
+  }
+})
+```
+
+This fails because plugins run once at app startup, not per-navigation. The route at plugin initialization time is the initial page load route. If a visitor lands on the storefront and later navigates to the dashboard, the plugin already ran (without loading toast) and won't run again. Toast notifications would silently fail for any user who doesn't land directly on a dashboard URL.
+
+**Approach 3: Moving imports into the consuming components.** Instead of a plugin, we could remove the plugin entirely and let each component import vue3-toastify directly. In theory, Nuxt's route-based code splitting would then place the library in each route's chunk.
+
+This almost works, but it has two problems. First, vue3-toastify requires a one-time `app.use()` call to register its container component — without the plugin, there's no toast container in the DOM, and `toast.success()` calls silently do nothing. Second, even if we solved the registration problem, having the import in eleven different components across multiple routes means the bundler's common-chunk heuristic would pull it right back into the entry bundle. We'd be back where we started.
+
+The right solution had to meet three constraints: defer the download until first use, handle the one-time `app.use()` registration, and work from any component without that component knowing about the lazy-loading mechanism.
+
+## The Pattern: Dynamic Composables
+
+The fix had two parts: a composable that lazily loads the library, and a plugin rewrite that defers initialization.
+
+### Part 1: The Lazy Toast Composable
+
+Instead of importing `toast` at the module level in every component, we created a composable that loads the library only when someone actually triggers a toast:
+
+```typescript
+// composables/useLazyToast.ts
+import type { ToastOptions } from 'vue3-toastify'
+
+let toastModule: typeof import('vue3-toastify') | null = null
+let initPromise: Promise<typeof import('vue3-toastify')> | null = null
+
+async function init() {
+  if (toastModule) return toastModule
+
+  if (!initPromise) {
+    initPromise = import('vue3-toastify').then(async (mod) => {
+      await import('vue3-toastify/dist/index.css')
+      toastModule = mod
+      return mod
+    })
+  }
+
+  return initPromise
+}
+
+export function useLazyToast() {
+  const success = async (message: string, options?: ToastOptions) => {
+    const { toast } = await init()
+    toast.success(message, options)
+  }
+
+  const error = async (message: string, options?: ToastOptions) => {
+    const { toast } = await init()
+    toast.error(message, options)
+  }
+
+  return { success, error }
+}
+```
+
+There are four design decisions worth explaining here.
+
+**Module-level singleton.** The `toastModule` and `initPromise` variables live outside the composable function. This means every component that calls `useLazyToast()` shares the same cached module reference. The library loads once, on the first toast trigger anywhere in the app. Every subsequent toast — from any component — reuses the already-loaded module with zero async overhead.
+
+**Promise deduplication.** If two mutations complete simultaneously and both try to show a toast, the `initPromise` check ensures only one `import()` call happens. The second caller awaits the same Promise as the first. Without this, you could end up with duplicate CSS injections or race conditions during module initialization.
+
+**CSS loaded inside the dynamic import chain.** The `await import('vue3-toastify/dist/index.css')` call is chained inside the `.then()` after the JavaScript module loads. This ensures the stylesheet is injected only after the toast runtime is available, and only when a toast is actually needed. No more 9 KB of CSS in the entry stylesheet for a feature nobody on the storefront uses.
+
+**Type-only import at the top.** The `import type { ToastOptions }` at the top of the file is a TypeScript type import. It's erased completely during compilation — zero bytes in the output. We get full type safety for the `options` parameter without pulling the library into the bundle.
+
+### Part 2: The Plugin Rewrite
+
+The plugin also needed to change. Instead of synchronously importing and registering vue3-toastify at startup, it now defers everything to a dynamic import:
+
+```typescript
+// plugins/toast.ts
+import type { ToastContainerOptions } from 'vue3-toastify'
+
+export default defineNuxtPlugin((nuxt) => {
+  void import('vue3-toastify').then(async ({ default: Vue3Toastify }) => {
+    await import('vue3-toastify/dist/index.css')
+    nuxt.vueApp.use(
+      Vue3Toastify,
+      {
+        autoClose: 2000,
+        position: 'bottom-right',
+        limit: 5,
+      } as ToastContainerOptions,
+    )
+  })
+})
+```
+
+The `void` keyword before `import()` is deliberate. It tells the plugin to fire-and-forget the dynamic import — the plugin resolves immediately without waiting for vue3-toastify to load. The Vue app initializes and renders without the toast library. When a user eventually triggers a mutation that shows a toast, the composable's `init()` function loads the module (or reuses it if the plugin's background import already completed).
+
+### Part 3: Updating Every Consumer
+
+With the composable in place, every component that previously imported `toast` directly needed to switch to `useLazyToast()`:
+
+```typescript
+// Before
+import { toast } from 'vue3-toastify';
+
+const { mutate } = useMutation({
+  onSuccess() { toast.success("Updated!") },
+  onError()   { toast.error("Something went wrong!") },
+})
+
+// After
+const { success: toastSuccess, error: toastError } = useLazyToast()
+
+const { mutate } = useMutation({
+  onSuccess() { toastSuccess("Updated!") },
+  onError()   { toastError("Something went wrong!") },
+})
+```
+
+We updated eleven files: six dashboard pages, two components, one layout, one public-facing survey page, and the plugin itself. The diff was mechanical — find every `import { toast } from 'vue3-toastify'`, replace with `const { success: toastSuccess, error: toastError } = useLazyToast()`, then rename `toast.success` to `toastSuccess` and `toast.error` to `toastError`.
+
+Because `useLazyToast` is a composable defined in the `composables/` directory, Nuxt auto-imports it. No import statement needed in any of the eleven consumer files.
+
+## The Bundler Configuration Change
+
+One more thing had to change. Our Vite config had vue3-toastify in the `optimizeDeps.include` array:
+
+```typescript
+// nuxt.config.ts (before)
+vite: {
+  optimizeDeps: {
+    include: [
+      'vue3-toastify',   // <-- Forces pre-bundling into entry
+      '@tanstack/vue-query',
+      'slugify',
+    ],
+  },
+},
+```
+
+The `optimizeDeps.include` option tells Vite to pre-bundle a dependency during dev server startup — converting it from CommonJS or pre-optimizing it for faster dev reloads. But it also signals to the production bundler that this dependency is eagerly loaded. With our switch to dynamic imports, keeping vue3-toastify in this list would undermine the lazy-loading strategy.
+
+Removing that single line ensured the bundler treated vue3-toastify as a dynamic chunk candidate in both development and production builds.
+
+## The Results
+
+After deploying to production:
+
+| Asset | Before | After | Saved |
+|-------|--------|-------|-------|
+| entry.js | 604 KB | 582 KB | 22 KB (-3.6%) |
+| entry.css | 118 KB | 109 KB | 9 KB (-7.6%) |
+| **Total entry weight** | **722 KB** | **691 KB** | **31 KB (-4.3%)** |
+
+vue3-toastify now loads as a separate chunk, only when the first toast is triggered. For the vast majority of visitors — those browsing the storefront, reading product descriptions, comparing finishes — that chunk never loads at all.
+
+For dashboard users who do trigger toasts, the library loads in the background when they first interact with a mutation. The first toast might appear with a barely perceptible delay (the time to fetch and parse the chunk), but subsequent toasts are instant because the module is cached.
+
+### What the Numbers Mean for Real Users
+
+A 31 KB reduction in entry weight translates differently depending on the connection:
+
+| Connection | Time Saved (transfer) | Impact |
+|------------|----------------------|--------|
+| 4G (10 Mbps) | ~25ms | Imperceptible |
+| 3G (1.5 Mbps) | ~165ms | Noticeable on first paint |
+| Slow 3G (400 Kbps) | ~620ms | Meaningful for engagement |
+
+On fast connections, this is invisible. On slower connections — which still represent a significant portion of global web traffic — it's the difference between a page that feels snappy and one that feels sluggish. And these gains apply to every page load, for every visitor, on every session.
+
+## When to Apply This Pattern
+
+The lazy composable pattern works for any library that meets three criteria:
+
+1. **It's not needed on initial render.** If the library has to run during hydration (layout engines, state managers, route guards), you can't defer it.
+
+2. **It's triggered by user interaction.** Toast notifications, modal dialogs, clipboard operations, file upload parsers, rich text editors — anything that waits for a user action before executing is a candidate for lazy loading.
+
+3. **A small delay on first trigger is acceptable.** The first invocation pays the cost of downloading and parsing the chunk. For toast notifications, a 50-100ms delay before the first toast appears is imperceptible — the user just clicked a button and is watching for feedback, not timing it with a stopwatch.
+
+Libraries that commonly end up in entry bundles unnecessarily:
+
+| Library | Typical Size | Pattern |
+|---------|-------------|---------|
+| Toast / notification | 15-30 KB | Dynamic composable (what we did) |
+| Rich text editor | 100-400 KB | Dynamic component with loading state |
+| Date picker | 30-80 KB | Dynamic component |
+| Chart library | 50-200 KB | Dynamic component with skeleton |
+| PDF generator | 100-500 KB | Dynamic import on button click |
+| Clipboard API wrapper | 5-15 KB | Dynamic composable |
+
+The pattern scales. If you have a 200 KB chart library that only renders on one dashboard page, wrapping it in a lazy composable or dynamic component keeps it out of the entry chunk entirely. The savings compound — each library you defer is weight removed from every page load.
+
+## What We Should Have Done From the Start
+
+Looking back, the mistake wasn't choosing vue3-toastify. The library is well-maintained, lightweight for what it does, and has a clean API. The mistake was treating it like a framework-level dependency when it's actually a feature-level dependency.
+
+Framework-level dependencies — Vue, the router, the state management library — genuinely need to be in the entry chunk. They're used on every page, during every render cycle, from the first paint onwards. Feature-level dependencies — toast notifications, rich text editors, chart libraries, PDF generators — are used by specific features, triggered by specific user actions, on specific pages.
+
+The distinction matters because bundlers optimize for the wrong metric when you blur this line. By importing vue3-toastify at the plugin level and in eleven components, we told the bundler: "this is framework-level, load it everywhere." The bundler believed us. It did its job perfectly — it just did the wrong job because we gave it the wrong signal.
+
+The rule we now follow: **if a library is triggered by user interaction rather than page render, it should never appear in a static import.** Every `import` statement at the top of a file is a promise to the bundler that this code is needed when the module loads. If that promise isn't true — if the code is only needed when a button is clicked or a form is submitted — the import should be dynamic.
+
+## The Broader Principle
+
+Bundle optimization often focuses on the big wins: code splitting by route, tree shaking unused exports, replacing heavy libraries with lighter alternatives. Those matter. But the entry chunk deserves special scrutiny because it's the one chunk that every visitor downloads on every page.
+
+Most teams review their total bundle size. Fewer teams audit the entry chunk specifically. The total bundle can be 3 MB and that's fine — as long as each page only downloads the chunks it needs. But if the entry chunk is 700 KB and 100 KB of it is feature code that most visitors never trigger, every visitor is paying a tax for features they'll never use.
+
+The audit process is straightforward:
+
+1. Run your bundle analyzer (`npx nuxi analyze` for Nuxt, `source-map-explorer` for other frameworks)
+2. Look specifically at the entry chunk — not the biggest chunk, the entry chunk
+3. For each module in the entry chunk, ask: "Is this needed before the first pixel paints?"
+4. Anything that answers "no" is a candidate for dynamic import
+
+In our case, the audit took fifteen minutes and identified one library. The fix took two hours and touched thirteen files. The 31 KB savings apply to every page load, for every visitor, for every session, from now until we remove the library entirely.
+
+The question to ask isn't "how big is our total bundle?" — it's "how much of the entry chunk is actually needed for first render?"
+
+Any code in the entry chunk that isn't required for the initial page paint is a tax on every visitor. Toast libraries, admin-only utilities, analytics setup code, error tracking initialization — all of these can be deferred to dynamic imports without any visible impact on user experience.
+
+We spent months not noticing 31 KB of toast library code in our entry chunk. The fix was trivial once we identified the problem. The lesson is less about toast notifications and more about the assumptions we make when we write `import` at the top of a file.
+
+Sometimes the best performance optimization is removing code from a place it never should have been.

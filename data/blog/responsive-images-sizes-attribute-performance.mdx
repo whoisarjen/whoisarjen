@@ -1,0 +1,250 @@
+---
+title: "The sizes Attribute Is the Most Impactful Image Optimization You Are Not Using"
+date: 2026-04-06T10:00:00Z
+summary: "We discovered that our image optimization pipeline was generating perfect srcset values that the browser completely ignored. The fix was a single HTML attribute we had been treating as optional for years."
+tags: ['Performance', 'Images', 'Web Vitals', 'Responsive Design', 'Nuxt', 'Frontend', 'Optimization']
+---
+
+## 315 Images, Zero Optimization
+
+We had done everything right. Or so we thought.
+
+Our image pipeline was running through a CDN with automatic WebP conversion, quality tuning, and on-the-fly resizing. Every image URL accepted width and quality parameters. The infrastructure was solid. The Lighthouse scores told a different story.
+
+During a routine performance audit on our e-commerce platform, we opened DevTools on a product listing page and looked at the Network tab filtered to images. A grid of product thumbnails -- each displayed at roughly 300px wide on desktop and 180px on mobile -- was downloading images at 1380px wide. Every single one.
+
+We checked the hero banner. Same problem. The banner was displayed full-width on desktop (about 1400px) but on a phone screen at 390px, the browser was still downloading the 1380px version. On a 2x retina display, it was downloading the 2760px version.
+
+We checked the marketing site. Same problem. Thirty-five images, all downloading at their maximum intrinsic size regardless of how they were displayed.
+
+Across both applications, we counted approximately 315 image instances. Not a single one was being served at the correct size for the viewport. Our CDN was generating perfectly optimized images at every width we requested -- and the browser was requesting the wrong width every time.
+
+## Why srcset Alone Is Not Enough
+
+The root cause was something we had fundamentally misunderstood about how responsive images work.
+
+Modern image components (including the one from Nuxt Image v2 that we use) generate a `srcset` attribute listing the same image at multiple widths:
+
+```html
+<!-- What our component was generating WITHOUT sizes -->
+<img
+  srcset="/image.webp?w=640 1x, /image.webp?w=1280 2x"
+  src="/image.webp?w=640"
+  width="640"
+/>
+```
+
+Without a `sizes` attribute, the image library falls back to **density descriptors** (`1x`, `2x`). This tells the browser: "pick the image based on device pixel ratio only." A 1x device gets the 640px image. A 2x retina device gets the 1280px image. The actual display size of the image on the page is completely irrelevant.
+
+This is the critical distinction that most developers miss. There are two types of srcset descriptors, and they behave very differently:
+
+| Descriptor Type | Example | Browser Selection Logic |
+|----------------|---------|------------------------|
+| Density (`1x`, `2x`) | `image.webp 1x, image-2x.webp 2x` | Picks based on device pixel ratio only |
+| Width (`300w`, `600w`) | `image.webp 300w, image.webp 600w` | Picks based on viewport width AND device pixel ratio |
+
+Width descriptors are strictly more intelligent. But here is the catch: **the browser will only use width descriptors if a `sizes` attribute is present.** Without `sizes`, the browser has no idea how wide the image will be rendered, so it cannot make an intelligent choice. It falls back to the only signal it has -- pixel density.
+
+Here is what the same image looks like with `sizes` provided:
+
+```html
+<!-- What our component generates WITH sizes -->
+<img
+  srcset="
+    /image.webp?w=320 320w,
+    /image.webp?w=640 640w,
+    /image.webp?w=960 960w,
+    /image.webp?w=1280 1280w,
+    /image.webp?w=1920 1920w
+  "
+  sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+  src="/image.webp?w=640"
+/>
+```
+
+Now the browser knows: "On screens up to 640px, this image takes the full width. Up to 1024px, it takes half. Above that, a third." It multiplies the calculated display width by the device pixel ratio and picks the closest match from the srcset. A 390px phone at 2x requests the 960w variant (390 x 2 = 780, closest match is 960). A 1440px desktop at 1x requests the 640w variant (1440 x 0.33 = 475, closest match is 640).
+
+## The Math That Made Us Act
+
+We ran the numbers on a typical product listing page to understand the actual waste. The page shows a grid that shifts from 2 columns on mobile to 4 columns on desktop, with 12 products visible above the fold.
+
+| Scenario | Image Requested | Image Needed | Waste Per Image |
+|----------|----------------|--------------|-----------------|
+| Mobile (390px, 2x), 2-col grid | 1280px (2x density) | 390px (195px x 2) | 890px too wide |
+| Tablet (768px, 2x), 3-col grid | 1280px (2x density) | 512px (256px x 2) | 768px too wide |
+| Desktop (1440px, 1x), 4-col grid | 640px (1x density) | 360px | 280px too wide |
+
+Image file size scales roughly with the square of the width (twice the width means four times the pixels). A 1280px WebP image at quality 75 was coming in around 120-180KB. The correctly sized 390px version of the same image was around 15-25KB. Multiply that by 12 product thumbnails above the fold, and we were transferring roughly 1.5MB of image data that should have been about 250KB.
+
+That is over a megabyte of unnecessary data on every mobile page load. For a page that loads in 2.5 seconds on a good connection, the image waste alone could account for 800ms on a typical 4G connection.
+
+## The Fix: One Prop, 315 Instances
+
+Our image component is a wrapper around Nuxt Image. It accepted an optional `sizes` prop and passed it through to the underlying component. The fix had two parts.
+
+**Part 1: Make `sizes` a required prop.** We changed the TypeScript definition from optional to required:
+
+```typescript
+// Before
+defineProps<{
+  src?: string
+  sizes?: string  // optional -- easy to forget
+}>()
+
+// After
+defineProps<{
+  src?: string
+  sizes: string  // required -- TypeScript enforces it
+}>()
+```
+
+This single change made TypeScript flag every image instance in both applications that was missing the prop. The compiler became our audit tool.
+
+**Part 2: Add the correct `sizes` value to all 315 instances.** This was the tedious part, but the logic was straightforward. For each image, we asked one question: "How wide is this image at each breakpoint?"
+
+The answer came directly from the CSS. Here are the patterns we encountered:
+
+```
+Full-width heroes and banners:
+  sizes="100vw"
+
+Grid with 2 cols on mobile, 3 on tablet, 4 on desktop:
+  sizes="50vw sm:33vw lg:25vw"
+
+Fixed-size icons (56px square):
+  sizes="56px"
+
+Logo that changes size at breakpoints:
+  sizes="128px md:208px"
+
+Product card in a carousel:
+  sizes="85vw sm:45vw md:30vw xl:22vw"
+
+Small flag icons:
+  sizes="28px"
+```
+
+The syntax we used is a shorthand where breakpoint names map to CSS widths (sm=640px, md=768px, lg=1024px, xl=1280px). This gets expanded to standard media query syntax in the final HTML.
+
+The key insight is that the `sizes` value should mirror your CSS layout, not the intrinsic image dimensions. If your CSS says `grid-cols-4` at the `lg` breakpoint, your sizes should say `lg:25vw`. If an image is always rendered at 56 pixels wide regardless of screen size, your sizes should say `56px`.
+
+The most common mistake we saw during the audit was defaulting to the image's intrinsic width. A product photo might be 800px at full resolution, but if it is displayed in a four-column grid, it only ever occupies 25% of the viewport width. The `sizes` attribute should say `25vw`, not `800px`. The browser will multiply 25% of the viewport by the device pixel ratio and pick the closest srcset candidate. On a 1440px desktop at 1x, that is 360px. On a 390px phone at 2x, that is 195px. Both are dramatically smaller than the 800px intrinsic width, and the image quality difference at those display sizes is imperceptible.
+
+We also discovered that dynamic sizing requires dynamic `sizes` values. Our finish color picker component renders swatches at either 56px or 48px depending on a prop. The sizes attribute needed to be reactive too -- bound to the same conditional that controls the rendered width. Static sizes on dynamic images is another common source of mismatch.
+
+## Preload Links Were Also Broken
+
+While fixing the `sizes` attribute on image tags, we discovered a second problem: our preload links had the same issue.
+
+For above-the-fold images (like the hero banner), we inject a preload link into the document head so the browser starts downloading the image before it parses the HTML and discovers the image tag. Our preload implementation looked like this:
+
+```typescript
+// Before: preload always fetched the full-size image
+useHead({
+  link: [{
+    rel: 'preload',
+    as: 'image',
+    fetchpriority: 'high',
+    href: getFullSizeImageUrl(src),  // always the biggest version
+  }]
+})
+```
+
+This meant the preload link was downloading a 1380px image on mobile, and then when the browser reached the image tag (now with correct `sizes`), it would calculate that it actually needed a 390px image. The preloaded image was wasted. The browser downloaded the correct smaller image separately.
+
+We fixed this by using `imagesrcset` and `imagesizes` attributes on the preload link, matching the same srcset and sizes that the image tag uses:
+
+```typescript
+// After: preload respects sizes
+useHead({
+  link: [{
+    rel: 'preload',
+    as: 'image',
+    fetchpriority: 'high',
+    imagesizes: computedSizes,    // same as the img sizes attribute
+    imagesrcset: computedSrcset,  // same as the img srcset attribute
+  }]
+})
+```
+
+Now the preload link and the image tag agree on which variant to download. The browser fetches the correctly-sized image during preload, and reuses it when it encounters the image tag.
+
+## The Preload Overuse Problem
+
+With the preload mechanism fixed, we found a third issue: too many images were marked for preload.
+
+On our homepage, we had six images with `preload` and `fetchpriority="high"`: the hero banner, a logo overlay on the banner, three SVG feature icons below the fold, and the logo in the mobile navigation drawer. All six competed for early bandwidth.
+
+The `fetchpriority="high"` hint tells the browser to prioritize a resource, but when everything is high priority, nothing is. The browser was splitting its early bandwidth budget across six preloads instead of dedicating it to the one that actually mattered -- the hero banner, which is the Largest Contentful Paint (LCP) element.
+
+We removed `preload` from five of the six images, keeping it only on the hero banner. The below-fold SVG icons do not need preload -- they are not visible until the user scrolls. The mobile nav drawer logo is behind a hamburger menu interaction. The banner overlay logo is a secondary element that does not affect LCP timing.
+
+## What Changed in Practice
+
+The combined effect of these three changes -- correct `sizes` on all images, responsive preload links, and focused preload usage -- showed up clearly in the network waterfall.
+
+**Before (mobile, product listing page):**
+- 12 product thumbnails at 1280px wide: ~1.8MB total
+- Hero banner preloaded at 1380px: ~250KB
+- 5 additional unnecessary preloads competing for bandwidth
+- LCP image delayed by preload contention
+
+**After (mobile, product listing page):**
+- 12 product thumbnails at 390px wide: ~250KB total (86% reduction)
+- Hero banner preloaded at 390px: ~45KB
+- Single focused preload for LCP element
+- LCP image loads with full early bandwidth priority
+
+The total image payload for the above-the-fold content on mobile dropped from roughly 2MB to under 300KB. That is not a synthetic benchmark -- it is the actual network transfer difference visible in DevTools.
+
+On the marketing site, the effect was even more dramatic on the blog listing page. Hero images that were downloading at full resolution for the carousel now correctly sized to the viewport. Collection grid images that showed as 320px-wide cards stopped requesting 1280px originals.
+
+For context, the marketing site had 35 image instances across its pages. Every full-bleed hero got `sizes="100vw"`. Blog listing cards in a responsive grid got `sizes="100vw md:50vw lg:33vw"`. Fixed-size logos and portraits got explicit pixel values like `sizes="192px"` or `sizes="250px"`. The entire site migration took less than an hour because once you understand the pattern, each image is a ten-second decision: look at the CSS, write the sizes, move on.
+
+## Making It Permanent
+
+Fixing 315 images is pointless if the next developer (or the next month's worth of features) reintroduces the same problem. We needed the fix to be self-enforcing.
+
+**TypeScript enforcement.** By making `sizes` a required prop on the image component, any new image instance without `sizes` is a compile error. The developer cannot ship it. This is the strongest guarantee we have -- it is not a linting suggestion or a code review checklist item. It is a hard block.
+
+**Developer documentation.** We added the rule to our project documentation with specific examples covering the common patterns: responsive grids, fixed-size icons, full-width banners, and logos that change size at breakpoints. A developer adding a new image can pattern-match against these examples without needing to understand the full theory of responsive image selection.
+
+**Syntax guard rails.** We documented that the standard HTML media query syntax for sizes (like `(max-width: 640px) 50vw, 33vw`) does not work correctly with our image library's parser. The shorthand format (`50vw sm:33vw`) is required. This prevents a subtle bug where using the "correct" HTML syntax actually produces incorrect srcset generation.
+
+## The Five-Minute Checklist
+
+If you are using any image optimization framework (Nuxt Image, Next.js Image, Astro Image, or even plain HTML with a CDN), here is how to check whether you have this problem:
+
+1. Open your site on a mobile device (or use DevTools mobile emulation)
+2. Open the Network tab and filter to images
+3. Look at the "Size" column for your largest images
+4. Compare the downloaded image dimensions to the displayed dimensions
+
+If your images are downloading at 1280px or wider but displaying at 300-400px, you almost certainly have a missing `sizes` attribute problem. You can also check the generated HTML: if your `srcset` attributes use density descriptors (`1x`, `2x`) instead of width descriptors (`300w`, `640w`), the browser is not performing viewport-aware selection.
+
+The fix is mechanical: for each image, look at your CSS and answer "how wide is this image at each breakpoint?" Write that as your `sizes` value. If the image is always 56px wide, write `sizes="56px"`. If it is full-width on mobile and half-width on desktop, write `sizes="100vw md:50vw"` (or the equivalent media query syntax for your framework).
+
+It is not glamorous work. Updating 315 image instances was tedious. But there is no other single change we have made that reduced mobile page weight by 86% in an afternoon.
+
+One more thing to watch for: if you are using preload links for above-the-fold images, make sure those preloads include `imagesrcset` and `imagesizes` attributes that match the image tag. A preload without responsive sizing will download the full-size image, and then the browser will download the correctly-sized version separately when it encounters the image tag. You end up paying for the same image twice.
+
+## Why This Keeps Getting Missed
+
+We think this problem is so widespread because of three converging factors.
+
+**Image optimization frameworks create a false sense of security.** When you install an image optimization library and see it generating srcset attributes, it is natural to assume the hard work is done. The srcset is there. The multiple sizes are listed. The framework is handling it. What you do not see is that without `sizes`, the srcset is using density descriptors instead of width descriptors, and the browser is ignoring your carefully generated image variants.
+
+**It works fine on desktop.** The density descriptor approach downloads the intrinsic width at 1x density and double at 2x. For desktop browsers where the viewport is wide, the 1x image is often close to the correct size anyway. The waste is concentrated on mobile, where the viewport is narrow but the density is high. If you only test on desktop, you never see the problem.
+
+**The `sizes` attribute feels redundant.** The image tag already has `width` and `height` attributes. The CSS already controls the display size. It seems like the browser should be able to figure out the display size from the CSS. But the browser cannot -- the image resource selection happens before CSS is fully parsed, using a "preparser" that only has access to HTML attributes. The `sizes` attribute exists precisely because CSS layout information is not available at image selection time.
+
+This is one of those cases where understanding *why* the browser needs this information makes the fix obvious. The browser is trying to start downloading images as early as possible, before layout is computed. It is doing you a favor by not waiting for CSS. But the price of that eagerness is that you have to tell it how big the image will be, because it genuinely cannot figure that out on its own yet.
+
+## The Broader Lesson
+
+We spent months optimizing our CDN configuration, tweaking WebP quality settings, implementing lazy loading, adding blur-up placeholders, and building responsive preload logic. All of that work was necessary but insufficient. The single most impactful change was adding a four-character attribute to an HTML tag.
+
+Performance optimization is full of these moments. You can build the most sophisticated pipeline in the world, but if the browser does not have the information it needs to make the right decision, all that infrastructure goes to waste. The CDN was ready to serve perfectly sized images. The srcset was listing every available width. The browser was willing to pick the optimal one. It just needed us to tell it how big the image would actually be on screen.
+
+Sometimes the most important optimization is not a new tool or a clever algorithm -- it is a single attribute that bridges the gap between what the browser knows and what it needs to know.
+

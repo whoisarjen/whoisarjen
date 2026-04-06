@@ -1,0 +1,301 @@
+---
+title: "3,842 Lines of Redirect Constants Were Hiding in Our Client Bundle"
+date: 2026-04-06T11:00:00Z
+summary: "How we discovered that three redirect constant files were shipping 316KB of dead weight to every browser, and why moving them to server middleware with a database fallback cut our JavaScript bundle by a third."
+tags: ['JavaScript', 'Performance', 'Bundle Size', 'SEO', 'Redirects', 'Server-Side', 'Nuxt']
+---
+
+## The Discovery Nobody Expected
+
+We were investigating unrelated memory issues on our e-commerce platform when we opened the bundle analyzer. The JavaScript tab showed something strange: three constant files, each exporting a single object literal, collectively accounting for 316KB of the client-side bundle.
+
+These were redirect maps. Thousands of key-value pairs mapping old URLs to new ones, loaded into the browser of every single visitor who landed on the site. The redirects existed because we had migrated our URL structure months earlier -- translating category slugs, news article paths, and fixing crawl errors flagged by Google Search Console. The maps themselves were doing their job. The problem was *where* they were doing it.
+
+Every redirect was handled by a Vue Router navigation guard -- a piece of client-side middleware that runs in the browser after the initial JavaScript loads, parses the route, checks it against three enormous lookup tables, and calls `navigateTo()` with a 301 status code. The redirect worked, but only after the browser had downloaded, parsed, and executed 316KB of JavaScript that existed solely to say "you should be somewhere else."
+
+## The Anatomy of the Bloat
+
+The redirect constants lived in three files inside the `app/constants/` directory:
+
+| File | Lines | Purpose |
+|------|-------|---------|
+| `category-slug-redirects.constant.ts` | 2,101 | Category URL translations across 12 languages |
+| `gsc-error-redirects.constant.ts` | 968 | Fixes for URLs flagged as errors in Search Console |
+| `news-slug-redirects.constant.ts` | 357 | Old news article slug mappings |
+| **Total** | **3,426** | **Static redirect mappings** |
+
+On top of these constants, there was a 416-line client middleware file that imported all three maps, combined them with additional prefix-based redirects, special case handlers, and a fallback API call. Total: 3,842 lines of code executing in the browser.
+
+The category slug file alone was over two thousand lines. Here is what a typical section looked like -- one category, twelve languages:
+
+```typescript
+export const CATEGORY_SLUG_REDIRECTS: Record<string, string> = {
+  "/en/kitchen/taps": "/en/kuchnia/baterie",
+  "/de/kuche/armaturen": "/de/kuchnia/baterie",
+  "/uk/kukhnya/zmishuvachi": "/uk/kuchnia/baterie",
+  "/ru/kuhnya/smesiteli": "/ru/kuchnia/baterie",
+  "/hu/konyha/csaptelepek": "/hu/kuchnia/baterie",
+  "/ro/bucatarie/baterii": "/ro/kuchnia/baterie",
+  "/fr/cuisine/robinets": "/fr/kuchnia/baterie",
+  "/sl/kuhinja/armature": "/sl/kuchnia/baterie",
+  "/es/cocina/griferia": "/es/kuchnia/baterie",
+  "/it/cucina/rubinetteria": "/it/kuchnia/baterie",
+  "/ar/kitchen/taps": "/ar/kuchnia/baterie",
+  "/pt/cozinha/torneiras": "/pt/kuchnia/baterie",
+  // ... repeat for every category in the product tree
+};
+```
+
+Multiply that pattern by every kitchen subcategory (taps, sinks, sink-and-tap sets, accessories, waste traps, cleaning products), every bathroom subcategory (mixers, showers, bathtubs, washbasins, toilets, furniture, accessories, shower cabins, installations), and every sub-subcategory within those. Then add twelve languages for each. The combinatorial explosion was staggering, and every byte of it was being shipped to the client.
+
+## Why It Happened
+
+The redirect constants were not born as a single 3,842-line mistake. They grew incrementally through three separate engineering decisions, each reasonable in isolation.
+
+**Phase 1: The URL migration.** We changed our URL structure to use a single canonical language for slugs across all locales. Instead of `/en/kitchen/taps` and `/de/kuche/armaturen` pointing to separate pages, both now redirected to a unified path. This required generating redirect entries for every category-language combination. Someone wrote a script that pulled the old slugs from the database, generated the redirect map, and exported it as a TypeScript constant. It worked instantly, no database calls needed at runtime.
+
+**Phase 2: The Search Console cleanup.** Google Search Console flagged nearly a thousand URLs as soft 404s or crawl errors. These were old product URLs, malformed paths from external links, and legacy routes from a previous platform. The quickest fix was another constant file -- another 968 lines dropped into the bundle.
+
+**Phase 3: The news slug migration.** Same pattern. Old news article URLs needed to redirect to new paths. Another 357-line constant file.
+
+Each addition took under an hour. Nobody questioned the approach because each file individually seemed small enough. But bundlers do not judge files individually. They concatenate, minify, and ship. Three "small" files became one 316KB chunk of JavaScript that every visitor downloaded on every page load.
+
+## The Real Cost
+
+### Client-Side Performance
+
+316KB of minified JavaScript is not free. On a mid-range mobile device, parsing and compiling 316KB of JS takes roughly 150-300ms. That is 150-300ms of main thread blocking before the page becomes interactive -- and the redirect maps do nothing for the vast majority of visitors who arrive on correct URLs.
+
+Our analytics showed that fewer than 0.3% of pageviews triggered any redirect. The remaining 99.7% of visitors downloaded, parsed, and executed 316KB of JavaScript that performed a single object lookup, found no match, and returned early.
+
+### SEO Impact
+
+Client-side redirects are fundamentally different from server-side redirects, and the difference matters for search engines.
+
+When a server responds with a 301 status code, the redirect happens before any HTML is sent. The crawler receives the redirect header, follows it, and indexes the destination URL. Clean, fast, unambiguous.
+
+When a redirect happens in client-side JavaScript, the server first sends a 200 OK response with the full HTML page, including all the JavaScript. The browser downloads everything, executes the Vue application, runs the navigation guard, and then initiates a new navigation. Googlebot handles JavaScript redirects, but there is a delay -- sometimes days or weeks -- before the redirect is recognized and the canonical URL is updated.
+
+Worse, client-side redirects can create temporary duplicate content signals. The server has responded with 200 OK and a rendered page for the old URL. Until the JavaScript executes the redirect, that old URL has its own content, its own title tag, its own meta description. Search engines processing the initial HTML response see a valid page, not a redirect.
+
+### The `navigateTo()` Problem
+
+There was a subtler issue with the client-side approach. The navigation guard used Vue Router's `navigateTo()` function with `redirectCode: 301`:
+
+```typescript
+if (staticSlugTarget) {
+  return navigateTo(staticSlugTarget, { redirectCode: 301 })
+}
+```
+
+This looks correct. But `navigateTo()` with a redirect code only produces an actual HTTP 301 during server-side rendering (SSR). For client-side navigations -- the user clicking a link, typing a URL in the browser bar after the app has loaded -- the redirect code is silently ignored. The navigation happens, but it is a client-side route change, not an HTTP redirect. No 301 header is ever sent.
+
+This means the redirect behavior was inconsistent. If Googlebot rendered the page with SSR, it might see a proper 301. If it followed a link from within the already-loaded SPA, it would see a client-side navigation. Two different behaviors for the same redirect rule, depending on how the page was reached.
+
+## The Solution
+
+Moving redirects to the server eliminated every problem simultaneously: zero client-side JavaScript, proper HTTP 301 responses, instant redirect resolution before any HTML is sent, and no inconsistency between SSR and client-side navigation.
+
+The migration split the redirect logic into two layers.
+
+### Layer 1: Server Middleware for Pattern-Based Redirects
+
+Some redirects cannot live in a database because they match prefixes, not exact paths. Product URLs, collection URLs, and a few special cases involve infinite combinations of slugs appended to a fixed prefix. These stayed as code, but moved from client middleware to server middleware:
+
+```typescript
+// server/middleware/0003-redirects.ts
+import { sendRedirect, getRequestURL } from 'h3'
+
+const OLD_ROUTE_PREFIXES: Record<string, string> = {
+  '/en/product': '/en/produkt',
+  '/fr/produit': '/fr/produkt',
+  '/it/prodotto': '/it/produkt',
+  // ... one entry per language
+}
+
+export default defineEventHandler(async (event) => {
+  const url = getRequestURL(event)
+  const path = url.pathname
+  const search = url.search
+
+  // Skip non-page requests
+  if (path.startsWith('/api/') || path.startsWith('/_nuxt/') ||
+      path.includes('.')) return
+
+  // Trailing slash normalization
+  if (path !== '/' && path.endsWith('/')) {
+    return sendRedirect(event, path.slice(0, -1) + search, 301)
+  }
+
+  // Prefix-based redirects
+  for (const [oldPrefix, newPrefix] of Object.entries(OLD_ROUTE_PREFIXES)) {
+    if (path === oldPrefix || path.startsWith(oldPrefix + '/')) {
+      return sendRedirect(event, newPrefix + path.slice(oldPrefix.length) + search, 301)
+    }
+  }
+})
+```
+
+The key difference: `sendRedirect()` from h3 issues a real HTTP 301 response. No HTML is sent. No JavaScript is loaded. The browser (or crawler) receives a `Location` header and follows it immediately. The redirect completes in under 5ms on the server, compared to 500ms+ for the client-side approach (download JS, parse, execute, navigate).
+
+### Layer 2: Database Lookup for Exact-Match Redirects
+
+The 3,426 constant entries -- category slugs, news slugs, Search Console fixes -- all shared one trait: they were exact path matches. No wildcards, no prefixes, no pattern matching. Just "if the path is X, redirect to Y." That is a database lookup.
+
+We added a `Redirect` table to the schema:
+
+```prisma
+model Redirect {
+  from             String   @id
+  to               String
+  lastUsed         DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([from])
+}
+```
+
+The `from` field is the primary key -- every redirect source is unique by definition. The `lastUsed` field tracks the last time each redirect was triggered, which lets us identify dead entries over time and clean them up.
+
+The server middleware queries this table as a last resort, after all prefix-based and special-case redirects have been checked:
+
+```typescript
+// DB lookup -- last resort
+try {
+  const result = await prisma.redirect.findFirst({
+    where: { from: path },
+    select: { to: true },
+  })
+  if (result?.to) {
+    return sendRedirect(event, result.to, 301)
+  }
+} catch {
+  // DB unavailable -- continue to Vue Router (renders 404)
+}
+```
+
+If the database is unreachable, the middleware silently continues. The visitor sees a 404 page instead of being stuck on an infinite loading screen -- a graceful degradation that was impossible with the client-side approach, where a failed `$fetch` call to the redirect API would throw an error in the Vue application.
+
+### The URL Decoding Edge Case
+
+One detail that bit us during testing: URL-encoded paths. A browser visiting an Arabic route like `/%D8%AD%D9%85%D8%A7%D9%85` sends the encoded form, but the database stores the decoded form. The middleware handles this by attempting both lookups:
+
+```typescript
+let decodedPath = path
+try { decodedPath = decodeURIComponent(path) } catch { decodedPath = path }
+
+const result = await prisma.redirect.findFirst({
+  where: decodedPath !== path
+    ? { from: { in: [path, decodedPath] } }
+    : { from: path },
+  select: { to: true },
+})
+```
+
+This single `findFirst` with an `in` clause covers both the encoded and decoded form in one query. Without it, every Arabic, Ukrainian, and Russian redirect would silently fail.
+
+## The Migration
+
+The actual migration was a single commit: 142 lines added, 3,842 lines deleted.
+
+| Change | Lines |
+|--------|-------|
+| Deleted `category-slug-redirects.constant.ts` | -2,101 |
+| Deleted `gsc-error-redirects.constant.ts` | -968 |
+| Deleted `news-slug-redirects.constant.ts` | -357 |
+| Deleted `001-redirects.global.ts` (client middleware) | -416 |
+| Added `0003-redirects.ts` (server middleware) | +141 |
+| Added `lastUsed` field to Redirect schema | +1 |
+| **Net** | **-3,700** |
+
+The 3,426 redirect entries from the constant files were inserted into the Redirect database table. The prefix-based redirects (products, collections) and special cases (QR codes, landing page vanity URLs) stayed as code in the server middleware -- roughly 50 entries that match patterns rather than exact paths.
+
+A day before the main migration, we also cleaned up 36 duplicate redirect entries that were declared in both the static map and the prefix-based redirects. The same path was being checked twice -- once as an exact match, once as a prefix. The duplicates were harmless but confusing for anyone reading the code.
+
+## The Results
+
+| Metric | Before | After |
+|--------|--------|-------|
+| Client bundle size (redirect code) | 316KB | 0KB |
+| Lines of client-side redirect code | 3,842 | 0 |
+| Lines of server-side redirect code | 0 | 141 |
+| Redirect response type | Mixed (SSR: 301, client: route change) | Always HTTP 301 |
+| Time to redirect (server) | N/A (client-side) | under 5ms |
+| Time to redirect (client, old) | 500ms+ (download + parse + execute) | N/A |
+| Redirect entries in database | Partial (API fallback only) | 3,426 |
+| Dead redirect tracking | None | Automatic via `lastUsed` |
+
+The most impactful number is the 316KB reduction in client JavaScript. That is 316KB that every visitor no longer downloads, no longer parses, no longer executes. On a 3G connection, that is roughly 2-3 seconds of download time eliminated. On a fast connection, it is still 150-300ms of parse/compile time removed from the main thread.
+
+### The Lighthouse Effect
+
+After deploying, our Lighthouse performance scores improved measurably. Total Blocking Time (TBT) dropped because 316KB of synchronous JavaScript no longer needed to be parsed before the page became interactive. First Contentful Paint was unaffected (it was already server-rendered), but Time to Interactive improved by the amount of time the browser had been spending on redirect constant parsing.
+
+### Crawl Budget
+
+For a multilingual e-commerce site with tens of thousands of product pages, crawl budget is a real concern. Every request Googlebot makes to a client-side-redirected URL consumes two crawl budget slots: one for the initial page (which returns 200 OK with the full app), and one for the destination URL after JavaScript execution. Server-side 301s consume one slot. With nearly a thousand Search Console error URLs redirecting properly on the server, we effectively doubled the crawl efficiency for those paths.
+
+## What We Should Have Done From the Start
+
+The answer, in retrospect, is obvious: **redirects are a server concern**. They should never have been in client-side code.
+
+The reason they ended up there was convenience. The Vue Router navigation guard was already handling route changes. Adding a lookup table was a one-line import. Nobody had to touch server configuration, set up middleware, or write database queries. The path of least resistance led directly into the client bundle.
+
+This is a pattern worth watching for in any single-page application. Routing logic in SPAs tends to accumulate responsibilities that belong on the server: redirects, authentication checks, locale detection, A/B test assignments. Each addition seems small. Each one increases the JavaScript payload. And unlike component code, routing logic runs on every single page load, not just the pages that use a specific component. Tree-shaking cannot help you because the navigation guard imports everything unconditionally.
+
+### The Incremental Growth Trap
+
+The most dangerous aspect was the incremental nature of the growth. Nobody shipped 3,842 lines of redirect constants in a single commit. It grew over months:
+
+1. URL migration adds 200 redirects. Seems fine.
+2. More categories get translated. Another 500 lines. Still manageable.
+3. Sub-categories get translated. 800 more lines. The file is getting large but it works.
+4. Search Console cleanup adds a second file. Nearly 1,000 lines.
+5. News migration adds a third file.
+
+At no point did anyone sit down and decide "let us ship 316KB of redirect maps to every browser." It happened one reasonable decision at a time.
+
+### The Monitoring Gap
+
+We did not have bundle size monitoring in CI. If we had a GitHub Action that compared the bundle size of each PR against the base branch, the first large constant file would have triggered a review. A simple threshold -- "alert if any PR increases client JS by more than 10KB" -- would have caught this before it reached production.
+
+## When to Use Each Approach
+
+**Server middleware** (code) for:
+- Prefix-based redirects where the suffix is dynamic (product slugs, article slugs)
+- Pattern matching that a database `WHERE` clause cannot express
+- Redirects that need access to request context (query parameters, headers)
+- Small, stable sets of redirects that rarely change
+
+**Database table** for:
+- Large volumes of exact-match redirects
+- Redirects that are generated or imported in bulk
+- Redirects that change frequently (editorial URL updates, SEO experiments)
+- When you need tracking (last used, hit count) for cleanup
+
+**Never in client-side JavaScript** for:
+- Any redirect, ever
+
+That last point is not hyperbole. There is no scenario where a client-side redirect is preferable to a server-side one. Client-side redirects are slower (the entire JS bundle must load first), less reliable (JavaScript can fail), worse for SEO (crawlers may not execute JS, or may see the pre-redirect content), and they increase the payload for every visitor regardless of whether they will be redirected.
+
+## The Cleanup Dividend
+
+The `lastUsed` field on the Redirect table is already paying dividends. Three days after deployment, we queried for redirects that had not been triggered since migration:
+
+```sql
+SELECT COUNT(*) FROM "Redirect"
+WHERE "lastUsed" < '2026-04-03';
+```
+
+Over 40% of the redirect entries had not been hit once. These are URLs that Google has already de-indexed, that no external site links to, that no user has visited. They are dead weight in the database -- but at least dead weight in a database is free. Dead weight in a client bundle costs performance on every single page load.
+
+We plan to run a monthly cleanup: any redirect not triggered in 90 days gets archived. The database stays lean, and we have a clear record of which old URLs still receive traffic.
+
+## Conclusion
+
+Three constant files. 3,842 lines. 316KB of JavaScript shipped to every visitor. Zero value for 99.7% of page loads. The fix was 141 lines of server middleware and a database table.
+
+The lesson is not about redirects specifically. It is about the gravitational pull of convenience. Client-side code is easy to write, easy to test, easy to deploy. Server-side code requires touching middleware, configuring databases, handling failures gracefully. The path of least resistance leads to the client bundle, and the client bundle leads to your users' browsers, and your users' browsers have limited patience.
+
+Every line of JavaScript you ship is a promise to every visitor: "you need this." Three thousand eight hundred and forty-two lines of redirect constants were a promise we should never have made.
