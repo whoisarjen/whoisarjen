@@ -14,7 +14,7 @@ export type GitHubProject = {
 export async function getGitHubProjects(): Promise<GitHubProject[]> {
   const res = await fetch(
     `https://api.github.com/users/${GITHUB_USERNAME}/repos?per_page=100&sort=updated`,
-    { next: { revalidate: 86400 } }
+    { next: { revalidate: 3600 } }
   )
 
   if (!res.ok) {
