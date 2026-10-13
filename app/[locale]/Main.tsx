@@ -1,11 +1,14 @@
 import Link from '@/components/Link'
+import Image from '@/components/Image'
 import siteMetadata from '@/data/siteMetadata'
 import { formatDate } from 'pliny/utils/formatDate'
-import Image from '@/components/Image'
 import { useTranslations, useLocale } from 'next-intl'
+import HeroZoom from '@/components/home/HeroZoom'
+import ProjectCarousel from '@/components/home/ProjectCarousel'
+import RiseObserver from '@/components/home/RiseObserver'
 
 const MAX_POSTS_DISPLAY = 6
-const MAX_PROJECTS_DISPLAY = 9
+const FEATURED_PROJECTS = ['Deante', 'Deante Design Studio', 'Comscore', 'Digital Nomad', 'Juicify']
 
 const techStack = [
   'TypeScript',
@@ -18,307 +21,347 @@ const techStack = [
   'Redis',
   'Prisma',
   'Tailwind CSS',
+  'Turborepo',
+  'Vercel',
 ]
 
-export default function Home({ posts, projects }) {
+export default function Home({ posts, postCount, projects }) {
   const t = useTranslations('home')
+  const tHire = useTranslations('hire')
   const locale = useLocale()
 
   const metrics = [
     { value: '-60%', label: t('metricApiLabel'), detail: t('metricApiDetail') },
     { value: '6x', label: t('metricCacheLabel'), detail: t('metricCacheDetail') },
     { value: '+80%', label: t('metricSearchLabel'), detail: t('metricSearchDetail') },
+    { value: '-92%', label: t('metricBundleLabel'), detail: t('metricBundleDetail') },
+    { value: '-70%', label: t('metricBandwidthLabel'), detail: t('metricBandwidthDetail') },
     { value: '13', label: t('metricLangsLabel'), detail: t('metricLangsDetail') },
   ]
 
+  const skills = [1, 2, 3, 4].map((i) => ({
+    title: tHire(`skill${i}Title`),
+    description: tHire(`skill${i}Desc`),
+  }))
+
+  const featured = FEATURED_PROJECTS.map((title) => projects.find((p) => p.title === title))
+    .filter(Boolean)
+    .map(({ title, description, href, imgSrc, techStack }) => ({
+      title,
+      description,
+      href,
+      imgSrc,
+      techStack,
+    }))
+
+  const roles = [
+    { label: tHire('role1'), kind: t('hireRole') },
+    { label: tHire('role2'), kind: t('hireRole') },
+    { label: tHire('role3'), kind: t('hireRole') },
+    { label: tHire('role5'), kind: t('hireTerms') },
+  ]
+
   return (
-    <div className="space-y-0">
-      {/* ── Hero ─────────────────────────────────────────────────── */}
-      <section className="relative pb-16 pt-8 sm:pb-20 sm:pt-12">
-        {/* Subtle grid background */}
-        <div
-          className="pointer-events-none absolute inset-0 -mx-4 sm:-mx-6 xl:-mx-[calc((100vw-64rem)/2)]"
-          aria-hidden="true"
-        >
-          <div className="absolute inset-0 bg-[linear-gradient(to_right,rgb(255_255_255/0.04)_1px,transparent_1px),linear-gradient(to_bottom,rgb(255_255_255/0.04)_1px,transparent_1px)] bg-[size:4rem_4rem]" />
-          <div className="absolute inset-0 bg-gradient-to-b from-gray-950 via-transparent to-gray-950" />
-        </div>
-
-        <div className="relative">
-          {/* Status badge */}
-          <div className="mb-8 flex items-center gap-2">
-            <span className="relative flex h-2.5 w-2.5">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
-            </span>
-            <span className="text-sm font-medium tracking-wide text-emerald-400">{t('badge')}</span>
-          </div>
-
-          {/* Headline block */}
-          <h1 className="max-w-3xl text-4xl font-extrabold leading-[1.1] tracking-tight text-white sm:text-5xl lg:text-6xl">
-            {t('heroLine1')}
-            <br />
-            <span className="bg-gradient-to-r from-sky-400 to-sky-500 bg-clip-text text-transparent">
-              {t('heroLine2')}
-            </span>
-          </h1>
-
-          <p className="mt-6 max-w-2xl text-lg leading-relaxed text-gray-400">
-            {t('heroSubtitle')}
-          </p>
-
-          {/* CTA row */}
-          <div className="mt-8 flex flex-wrap items-center gap-4">
-            <Link
-              href="#work"
-              className="inline-flex items-center rounded-lg bg-white px-5 py-2.5 text-sm font-semibold text-gray-900 transition-colors hover:bg-gray-100"
-            >
-              {t('viewMyWork')}
-              <svg
-                className="ml-2 h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                strokeWidth={2}
-                stroke="currentColor"
+    <div>
+      <RiseObserver />
+      <HeroZoom
+        scrollLabel={t('scroll')}
+        intro={
+          <>
+            <div>
+              <div className="hidden justify-between font-mono text-[11px] uppercase tracking-[0.08em] text-gray-400 min-[861px]:flex">
+                <span>Senior Full-Stack Engineer</span>
+                <span>{t('heroTag')}</span>
+              </div>
+              <h1
+                id="hero-title"
+                className="display text-[clamp(32px,10vw,48px)] text-sky-300 min-[861px]:mt-[22px] min-[861px]:text-[clamp(38px,5.2vw,88px)]"
               >
-                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-              </svg>
-            </Link>
-            <Link
-              href={`mailto:${siteMetadata.email}`}
-              className="inline-flex items-center rounded-lg border border-gray-700 bg-gray-900 px-5 py-2.5 text-sm font-semibold text-gray-300 transition-colors hover:bg-gray-800"
-            >
-              {t('getInTouch')}
-              <svg
-                className="ml-2 h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                strokeWidth={2}
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M4.5 19.5l15-15m0 0H8.25m11.25 0v11.25"
-                />
-              </svg>
-            </Link>
-
-            {/* Social icons */}
-            <div className="flex items-center gap-1 border-l border-gray-800 pl-4">
-              <Link
-                href={siteMetadata.github || '#'}
-                className="rounded-md p-2 text-gray-400 transition-colors hover:bg-gray-800 hover:text-white"
-                aria-label="GitHub"
-              >
-                <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
-                </svg>
+                {siteMetadata.author}
+                <small className="mt-[0.45em] block text-[max(15px,0.36em)] font-medium normal-case leading-[1.15] tracking-[-0.01em] text-gray-100">
+                  {t('heroTagline')}
+                </small>
+              </h1>
+              <p className="mt-4 max-w-[44ch] text-sm text-gray-300 min-[861px]:text-[15.5px]">
+                {t('heroSubtitle')}
+              </p>
+              <dl className="mt-[22px] hidden grid-cols-[repeat(3,auto)] justify-start gap-x-[30px] gap-y-1 font-mono text-[11px] uppercase tracking-[0.08em] text-gray-400 min-[861px]:grid">
+                <dt>{t('metricLangsLabel')}</dt>
+                <dt>{t('specProjects')}</dt>
+                <dt>{t('specArticles')}</dt>
+                <dd className="row-start-2 font-sans text-[22px] font-semibold normal-case tracking-[-0.02em] text-gray-100">
+                  13
+                </dd>
+                <dd className="row-start-2 font-sans text-[22px] font-semibold normal-case tracking-[-0.02em] text-gray-100">
+                  15+
+                </dd>
+                <dd className="row-start-2 font-sans text-[22px] font-semibold normal-case tracking-[-0.02em] text-gray-100">
+                  {postCount}
+                </dd>
+              </dl>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <Link href={`mailto:${siteMetadata.email}`} className="btn btn-accent">
+                {t('emailMe')}
               </Link>
-              <Link
-                href={siteMetadata.linkedin || '#'}
-                className="rounded-md p-2 text-gray-400 transition-colors hover:bg-gray-800 hover:text-white"
-                aria-label="LinkedIn"
-              >
-                <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z" />
-                </svg>
+              <Link href="/blog" className="btn btn-ghost">
+                {t('readBlog')}
               </Link>
             </div>
-          </div>
-        </div>
-
-        {/* ── Metrics strip ─────────────────────────────────────── */}
-        <div className="mt-14 grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-gray-800 bg-gray-800 sm:grid-cols-4">
-          {metrics.map((m) => (
-            <div key={m.label} className="flex flex-col gap-1 bg-gray-950 p-5 sm:p-6">
-              <span className="text-3xl font-extrabold tracking-tight text-white sm:text-4xl">
-                {m.value}
-              </span>
-              <span className="text-sm font-semibold text-gray-200">{m.label}</span>
-              <span className="text-sm text-gray-300">{m.detail}</span>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* ── Tech stack ───────────────────────────────────────────── */}
-      <section className="border-y border-gray-800">
-        <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-3 py-5">
-          {techStack.map((tech) => (
-            <span
-              key={tech}
-              className="text-xs font-semibold uppercase tracking-widest text-gray-400"
-            >
-              {tech}
-            </span>
-          ))}
-        </div>
-      </section>
-
-      {/* ── Featured Work ────────────────────────────────────────── */}
-      <section id="work" className="py-16 sm:py-20">
-        <div className="mb-10">
-          <h2 className="text-3xl font-extrabold tracking-tight text-white sm:text-4xl">
-            {t('featuredTitle')}
-          </h2>
-          <p className="mt-2 text-gray-400">{t('featuredSubtitle')}</p>
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {projects.length === 0 && <p className="text-gray-400">{t('noProjects')}</p>}
-          {projects.slice(0, MAX_PROJECTS_DISPLAY).map((project) => (
-            <Link
-              key={project.title}
-              href={project.href}
-              className="group flex flex-col overflow-hidden rounded-xl border border-gray-800 transition-colors hover:border-gray-700"
-            >
-              <div className="relative aspect-[16/9] overflow-hidden">
-                <Image
-                  src={project.imgSrc}
-                  alt={project.title}
-                  className="h-full w-full object-cover object-top transition-transform duration-500 group-hover:scale-105"
-                  width={544}
-                  height={306}
-                />
-              </div>
-              <div className="flex flex-1 flex-col p-4">
-                <h3 className="text-base font-bold text-white group-hover:text-sky-400">
-                  {project.title}
-                </h3>
-                <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-gray-400">
-                  {project.description}
-                </p>
-              </div>
-            </Link>
-          ))}
-        </div>
-
-        {projects.length > MAX_PROJECTS_DISPLAY && (
-          <div className="mt-8 flex items-center justify-center">
-            <Link
-              href="/projects"
-              className="inline-flex items-center gap-2 rounded-lg border border-gray-700 bg-gray-900 px-6 py-3 text-sm font-semibold text-gray-300 transition-colors hover:border-gray-600 hover:bg-gray-800 hover:text-white"
-            >
-              {t('viewAllProjects', { count: projects.length })}
-              <svg
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                strokeWidth={2}
-                stroke="currentColor"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"
-                />
-              </svg>
-            </Link>
-          </div>
-        )}
-      </section>
-
-      {/* ── Engineering Blog ─────────────────────────────────────── */}
-      <section className="border-t border-gray-800 py-16 sm:py-20">
-        <div className="mb-10 flex items-end justify-between">
-          <div>
-            <h2 className="text-3xl font-extrabold tracking-tight text-white sm:text-4xl">
-              {t('blogTitle')}
+          </>
+        }
+        reveal={
+          <>
+            <div className="eyebrow">{t('revealEyebrow')}</div>
+            <h2 className="display mt-3.5 text-[clamp(42px,6.4vw,108px)] text-white">
+              {t('revealTitle')}
             </h2>
-            <p className="mt-2 text-gray-400">{t('blogSubtitle')}</p>
-          </div>
-          <Link
-            href="/blog"
-            className="hidden text-sm font-semibold text-sky-500 hover:text-sky-400 sm:block"
-          >
-            {t('allPosts')} &rarr;
-          </Link>
-        </div>
+            <p className="mt-5 max-w-[42ch] text-[17px] text-gray-200">{t('revealBody')}</p>
+            <ul className="mt-6 flex flex-wrap gap-2" aria-label="Tech stack">
+              {[
+                'TypeScript',
+                'Vue',
+                'Nuxt',
+                'React',
+                'Next.js',
+                'PostgreSQL',
+                'Prisma',
+                'Vercel',
+              ].map((tech) => (
+                <li
+                  key={tech}
+                  className="rounded-full bg-white/[0.08] px-3 py-1.5 font-mono text-[11.5px] shadow-[inset_0_0_0_1px_rgb(255_255_255/0.14)]"
+                >
+                  {tech}
+                </li>
+              ))}
+            </ul>
+          </>
+        }
+      />
 
-        <div className="divide-y divide-gray-800">
-          {!posts.length && <p>{t('noPosts')}</p>}
-          {posts.slice(0, MAX_POSTS_DISPLAY).map((post) => {
-            const { slug, date, title, summary } = post
-            return (
-              <article key={slug} className="group py-6 first:pt-0 last:pb-0">
-                <Link href={`/blog/${slug}`} className="block">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:gap-6">
-                    <time dateTime={date} className="shrink-0 text-sm tabular-nums text-gray-400">
-                      {formatDate(date, locale === 'pl' ? 'pl-PL' : 'en-US')}
-                    </time>
-                    <div className="min-w-0 flex-1">
-                      <h3 className="text-lg font-semibold text-gray-100 group-hover:text-sky-400">
-                        {title}
-                      </h3>
-                      <p className="mt-1 line-clamp-1 text-sm text-gray-400">{summary}</p>
-                    </div>
-                    <svg
-                      className="hidden h-4 w-4 shrink-0 text-gray-700 transition-transform group-hover:translate-x-0.5 group-hover:text-sky-500 sm:block"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      strokeWidth={2}
-                      stroke="currentColor"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M8.25 4.5l7.5 7.5-7.5 7.5"
-                      />
-                    </svg>
-                  </div>
-                </Link>
-              </article>
-            )
-          })}
-        </div>
+      <section
+        aria-label="Tech stack"
+        className="border-b border-white/10 px-4 py-5 sm:px-6 lg:px-16"
+      >
+        <ul className="flex flex-wrap justify-between gap-x-7 gap-y-3 font-mono text-xs uppercase tracking-[0.06em] text-gray-400">
+          {techStack.map((tech) => (
+            <li key={tech}>{tech}</li>
+          ))}
+        </ul>
+      </section>
 
-        <div className="mt-6 sm:hidden">
-          <Link href="/blog" className="text-sm font-semibold text-sky-500 hover:text-sky-400">
-            {t('allPosts')} &rarr;
-          </Link>
+      <section
+        id="numbers"
+        aria-labelledby="numbers-title"
+        className="bg-bone px-4 py-20 text-ink sm:px-6 sm:py-28 lg:px-16 lg:py-36"
+      >
+        <SectionHead
+          eyebrow={`01 · ${t('numbersEyebrow')}`}
+          title={t('numbersTitle')}
+          id="numbers-title"
+          body={t('numbersBody')}
+          light
+        />
+        <div className="grid grid-cols-2 gap-px border-y border-ink/15 bg-ink/15 lg:grid-cols-3">
+          {metrics.map((m) => (
+            <div key={m.label} className="rise bg-bone px-5 py-7 sm:px-7">
+              <b className="block text-[clamp(48px,7vw,108px)] font-bold leading-[0.9] tracking-[-0.06em]">
+                {m.value}
+              </b>
+              <span className="mt-3 block font-semibold">{m.label}</span>
+              <small className="mt-1 block text-sm text-[#4f5752]">{m.detail}</small>
+            </div>
+          ))}
         </div>
       </section>
 
-      {/* ── CTA + Newsletter ────────────────────────────────────── */}
-      <section className="border-t border-gray-800 py-16 sm:py-20">
-        <div className="mx-auto max-w-xl text-center">
-          <h2 className="text-2xl font-extrabold tracking-tight text-white sm:text-3xl">
-            {t('ctaTitle')}
-          </h2>
-          <p className="mx-auto mt-3 max-w-md text-gray-400">{t('ctaSubtitle')}</p>
-          <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
-            <Link
-              href={`mailto:${siteMetadata.email}`}
-              className="inline-flex items-center rounded-lg bg-white px-6 py-3 text-sm font-semibold text-gray-900 transition-colors hover:bg-gray-100"
-            >
-              <svg
-                className="mr-2 h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                strokeWidth={1.5}
-                stroke="currentColor"
+      <section
+        aria-labelledby="bring-title"
+        className="bg-ink-2 px-4 py-20 sm:px-6 sm:py-28 lg:px-16 lg:py-36"
+      >
+        <SectionHead
+          eyebrow={`02 · ${tHire('whatIBring')}`}
+          title={t('bringTitle')}
+          id="bring-title"
+          body={t('bringBody')}
+        />
+        <ol className="grid gap-px border-t border-white/10 bg-white/10 sm:grid-cols-2 lg:grid-cols-4">
+          {skills.map((s, i) => (
+            <li key={s.title} className="rise bg-ink-2 px-6 pb-8 pt-7">
+              <span className="font-mono text-xs text-sky-300">
+                {String(i + 1).padStart(2, '0')}
+              </span>
+              <h3 className="mb-2 mt-3.5 text-[22px] font-semibold tracking-[-0.015em] text-white">
+                {s.title}
+              </h3>
+              <p className="text-[15px] text-gray-400">{s.description}</p>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      {featured.length > 0 && (
+        <section
+          id="work"
+          aria-labelledby="work-title"
+          className="overflow-clip px-4 py-20 sm:px-6 sm:py-28 lg:px-16 lg:py-36"
+        >
+          <SectionHead
+            eyebrow={`03 · ${t('featuredTitle')}`}
+            title={t('workTitle')}
+            id="work-title"
+            body={t('featuredSubtitle')}
+          />
+          <ProjectCarousel
+            projects={featured}
+            labels={{
+              region: t('projectsCarousel'),
+              previous: t('previousProject'),
+              next: t('nextProject'),
+              visit: t('visitSite'),
+            }}
+          />
+          <Link href="/projects" className="btn btn-ghost mt-10">
+            {t('viewAllProjects', { count: projects.length })}
+          </Link>
+        </section>
+      )}
+
+      <section
+        id="writing"
+        aria-labelledby="writing-title"
+        className="bg-bone px-4 py-20 text-ink sm:px-6 sm:py-28 lg:px-16 lg:py-36"
+      >
+        <SectionHead
+          eyebrow={`04 · ${t('blogTitle')}`}
+          title={t('writingTitle')}
+          id="writing-title"
+          body={t('blogSubtitle')}
+          light
+        />
+        {!posts.length && <p>{t('noPosts')}</p>}
+        <ul className="border-t border-ink/15">
+          {posts.slice(0, MAX_POSTS_DISPLAY).map(({ slug, date, title, summary }) => (
+            <li key={slug} className="rise">
+              <Link
+                href={`/blog/${slug}`}
+                className="group grid gap-1.5 border-b border-ink/15 py-6 sm:grid-cols-[140px_1fr_auto] sm:items-baseline sm:gap-6"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"
-                />
-              </svg>
-              {t('emailMe')}
-            </Link>
-            <Link
-              href={siteMetadata.linkedin || '#'}
-              className="inline-flex items-center rounded-lg border border-gray-700 bg-gray-900 px-6 py-3 text-sm font-semibold text-gray-300 transition-colors hover:bg-gray-800"
+                <time
+                  dateTime={date}
+                  className="font-mono text-xs tracking-[0.04em] text-[#4f5752]"
+                >
+                  {formatDate(date, locale === 'pl' ? 'pl-PL' : 'en-US')}
+                </time>
+                <div>
+                  <h3 className="mb-1.5 text-[clamp(20px,2vw,26px)] font-bold leading-[1.15] tracking-[-0.02em] decoration-1 underline-offset-[5px] group-hover:underline">
+                    {title}
+                  </h3>
+                  <p className="line-clamp-2 max-w-[80ch] text-[15px] text-[#4f5752]">{summary}</p>
+                </div>
+                <span
+                  aria-hidden="true"
+                  className="hidden text-xl transition-transform duration-200 group-hover:translate-x-1 sm:block"
+                >
+                  →
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+        <Link href="/blog" className="btn btn-ink mt-8">
+          {t('allArticles', { count: postCount })}
+        </Link>
+      </section>
+
+      <section
+        id="hire"
+        aria-labelledby="hire-title"
+        className="bg-ink-2 px-4 py-20 sm:px-6 sm:py-28 lg:px-16 lg:py-36"
+      >
+        <div className="grid items-center gap-10 md:grid-cols-[1fr_1.1fr] lg:gap-24">
+          <div className="rise relative aspect-[4/3.4] overflow-hidden rounded-[22px] md:aspect-[4/5]">
+            <Image
+              src={siteMetadata.avatar}
+              alt={siteMetadata.author}
+              fill
+              sizes="(min-width: 768px) 45vw, 92vw"
+              className="object-cover"
+            />
+            <span className="absolute bottom-4 left-4 rounded-full bg-ink/80 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.08em] text-sky-300">
+              {t('badge')}
+            </span>
+          </div>
+          <div className="rise">
+            <div className="eyebrow">05 · {tHire('metaTitle')}</div>
+            <h2
+              id="hire-title"
+              className="display mb-4 mt-3 text-[clamp(44px,6.4vw,104px)] leading-[0.88] tracking-[-0.05em] text-white"
             >
-              <svg className="mr-2 h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z" />
-              </svg>
-              LinkedIn
-            </Link>
+              {t('ctaTitle')}
+            </h2>
+            <p className="max-w-[46ch] text-[17px] text-gray-300">{t('ctaSubtitle')}</p>
+            <ul className="my-7 border-t border-white/10">
+              {roles.map((r) => (
+                <li
+                  key={r.label}
+                  className="flex justify-between gap-4 border-b border-white/10 py-3.5 text-gray-100"
+                >
+                  {r.label}
+                  <span className="shrink-0 font-mono text-[11px] uppercase text-gray-500">
+                    {r.kind}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <div className="flex flex-wrap gap-3">
+              <Link href={`mailto:${siteMetadata.email}`} className="btn btn-accent">
+                {t('emailMe')}
+              </Link>
+              <Link href={siteMetadata.linkedin || '#'} className="btn btn-ghost">
+                LinkedIn
+              </Link>
+              <Link href={siteMetadata.github || '#'} className="btn btn-ghost">
+                GitHub
+              </Link>
+            </div>
           </div>
         </div>
       </section>
+    </div>
+  )
+}
+
+function SectionHead({
+  eyebrow,
+  title,
+  id,
+  body,
+  light = false,
+}: {
+  eyebrow: string
+  title: string
+  id: string
+  body: string
+  light?: boolean
+}) {
+  return (
+    <div className="rise mb-10 grid items-end gap-8 sm:mb-16 md:grid-cols-[1.1fr_1fr]">
+      <div>
+        <div className={`eyebrow ${light ? '!text-sky-800' : ''}`}>{eyebrow}</div>
+        <h2
+          id={id}
+          className={`display mt-3 text-[clamp(34px,5vw,76px)] leading-[0.95] ${light ? 'text-ink' : 'text-white'}`}
+        >
+          {title}
+        </h2>
+      </div>
+      <p
+        className={`max-w-[46ch] text-[17px] md:justify-self-end ${light ? 'text-[#4f5752]' : 'text-gray-400'}`}
+      >
+        {body}
+      </p>
     </div>
   )
 }

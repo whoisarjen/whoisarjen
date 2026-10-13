@@ -22,11 +22,18 @@ module.exports = {
         14: '3.5rem',
       },
       fontFamily: {
-        sans: ['var(--font-inter)', ...fontFamily.sans],
+        sans: ['var(--font-sans)', ...fontFamily.sans],
+        mono: ['var(--font-mono)', ...fontFamily.mono],
       },
       colors: {
         primary: colors.sky,
-        gray: colors.gray,
+        gray: { ...colors.gray, 950: '#0a0d10' },
+        ink: { DEFAULT: '#0a0d10', 2: '#11161b', 3: '#1a2129' },
+        bone: { DEFAULT: '#eceae4', 2: '#e1ded6' },
+      },
+      transitionTimingFunction: {
+        'out-strong': 'cubic-bezier(0.23, 1, 0.32, 1)',
+        'in-out-strong': 'cubic-bezier(0.77, 0, 0.175, 1)',
       },
       typography: ({ theme }) => ({
         DEFAULT: {
@@ -53,11 +60,11 @@ module.exports = {
         invert: {
           css: {
             a: {
-              color: theme('colors.primary.500'),
+              color: theme('colors.primary.300'),
               '&:hover': {
-                color: `${theme('colors.primary.400')}`,
+                color: `${theme('colors.primary.200')}`,
               },
-              code: { color: theme('colors.primary.400') },
+              code: { color: theme('colors.primary.300') },
             },
             'h1,h2,h3,h4,h5,h6': {
               color: theme('colors.gray.100'),

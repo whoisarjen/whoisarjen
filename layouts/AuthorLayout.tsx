@@ -4,6 +4,7 @@ import type { Authors } from 'contentlayer/generated'
 import SocialIcon from '@/components/social-icons'
 import Image from '@/components/Image'
 import siteMetadata from '@/data/siteMetadata'
+import PageHeader from '@/components/PageHeader'
 
 interface Props {
   children: ReactNode
@@ -14,38 +15,34 @@ export default function AuthorLayout({ children }: Props) {
   const t = useTranslations('about')
   return (
     <>
-      <div className="divide-y divide-gray-700">
-        <div className="space-y-2 pb-8 pt-6 md:space-y-5">
-          <h1 className="text-3xl font-extrabold leading-9 tracking-tight text-gray-100 sm:text-4xl sm:leading-10 md:text-6xl md:leading-14">
-            {t('title')}
-          </h1>
-        </div>
-        <div className="items-start space-y-2 xl:grid xl:grid-cols-3 xl:gap-x-8 xl:space-y-0">
-          <div className="flex flex-col items-center pt-8">
-            {siteMetadata.avatar && (
+      <PageHeader eyebrow={siteMetadata.author} title={t('title')} />
+      <div className="grid items-start gap-12 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+        <div className="lg:sticky lg:top-28">
+          {siteMetadata.avatar && (
+            <div className="relative aspect-[4/5] overflow-hidden rounded-[22px]">
               <Image
                 src={siteMetadata.avatar}
                 alt={siteMetadata.author}
-                width={256}
-                height={256}
-                className="h-64 w-64 rounded-full"
+                fill
+                sizes="(min-width: 1024px) 33vw, 92vw"
+                className="object-cover"
               />
-            )}
-            <h3 className="pb-1 pt-6 text-3xl font-bold leading-8 tracking-tight text-white">
-              {siteMetadata.author}
-            </h3>
-            <p className="pb-2 pt-1 text-sm font-medium text-gray-400">
-              Senior Full-Stack Engineer
-            </p>
-            <div className="flex space-x-3 pt-4">
-              <SocialIcon kind="mail" href={`mailto:${siteMetadata.email}`} size={6} />
-              <SocialIcon kind="github" href={siteMetadata.github} size={6} />
-              <SocialIcon kind="linkedin" href={siteMetadata.linkedin} size={6} />
             </div>
+          )}
+          <h2 className="mt-6 text-2xl font-bold tracking-tight text-white">
+            {siteMetadata.author}
+          </h2>
+          <p className="mt-1 font-mono text-[11px] uppercase tracking-[0.08em] text-sky-300">
+            Senior Full-Stack Engineer
+          </p>
+          <div className="flex space-x-3 pt-5">
+            <SocialIcon kind="mail" href={`mailto:${siteMetadata.email}`} size={6} />
+            <SocialIcon kind="github" href={siteMetadata.github} size={6} />
+            <SocialIcon kind="linkedin" href={siteMetadata.linkedin} size={6} />
           </div>
-          <div className="prose prose-invert max-w-none pb-8 pt-8 text-gray-300 xl:col-span-2">
-            {children}
-          </div>
+        </div>
+        <div className="prose prose-lg prose-invert max-w-none text-gray-300 prose-headings:tracking-tight prose-h2:uppercase">
+          {children}
         </div>
       </div>
     </>

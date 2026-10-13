@@ -4,7 +4,6 @@ import { CoreContent } from 'pliny/utils/contentlayer'
 import type { Blog, Authors } from 'contentlayer/generated'
 import Link from '@/components/Link'
 import PageTitle from '@/components/PageTitle'
-import SectionContainer from '@/components/SectionContainer'
 import Image from '@/components/Image'
 import Tag from '@/components/Tag'
 import siteMetadata from '@/data/siteMetadata'
@@ -34,16 +33,16 @@ export default function PostLayout({ content, next, prev, children }: LayoutProp
   const basePath = path.split('/')[0]
 
   return (
-    <SectionContainer>
+    <div className="mx-auto max-w-5xl">
       <ScrollTopAndComment />
       <article>
-        <div className="xl:divide-y xl:divide-gray-700">
-          <header className="pt-6 xl:pb-6">
-            <div className="space-y-1 text-center">
-              <dl className="space-y-10">
+        <div className="xl:divide-y xl:divide-white/10">
+          <header className="pb-8 pt-4 xl:pb-10">
+            <div className="space-y-4">
+              <dl>
                 <div>
                   <dt className="sr-only">{t('publishedOn')}</dt>
-                  <dd className="text-base font-medium leading-6 text-gray-400">
+                  <dd className="font-mono text-xs uppercase tracking-[0.08em] text-sky-300">
                     <time dateTime={date}>
                       {new Date(date).toLocaleDateString(
                         locale === 'pl' ? 'pl-PL' : 'en-US',
@@ -58,8 +57,8 @@ export default function PostLayout({ content, next, prev, children }: LayoutProp
               </div>
             </div>
           </header>
-          <div className="grid-rows-[auto_1fr] divide-y divide-gray-700 pb-8 xl:grid xl:grid-cols-4 xl:gap-x-6 xl:divide-y-0">
-            <dl className="pb-10 pt-6 xl:border-b xl:border-gray-700 xl:pt-11">
+          <div className="grid-rows-[auto_1fr] divide-y divide-white/10 pb-8 xl:grid xl:grid-cols-4 xl:gap-x-6 xl:divide-y-0">
+            <dl className="pb-10 pt-6 xl:border-b xl:border-white/10 xl:pt-11">
               <dt className="sr-only">{t('authors')}</dt>
               <dd>
                 <ul className="flex flex-wrap justify-center gap-4 sm:space-x-12 xl:block xl:space-x-0 xl:space-y-8">
@@ -88,17 +87,21 @@ export default function PostLayout({ content, next, prev, children }: LayoutProp
                 </ul>
               </dd>
             </dl>
-            <div className="divide-y divide-gray-700 xl:col-span-3 xl:row-span-2 xl:pb-0">
-              <div className="prose prose-invert max-w-none pb-8 pt-10">{children}</div>
+            <div className="divide-y divide-white/10 xl:col-span-3 xl:row-span-2 xl:pb-0">
+              <div className="prose prose-lg prose-invert max-w-none pb-8 pt-10 prose-headings:tracking-tight prose-pre:rounded-xl">
+                {children}
+              </div>
               <div className="pb-6 pt-6 text-sm text-gray-300">
                 <Link href={editUrl(filePath)}>{t('viewOnGitHub')}</Link>
               </div>
             </div>
             <footer>
-              <div className="divide-gray-700 text-sm font-medium leading-5 xl:col-start-1 xl:row-start-2 xl:divide-y">
+              <div className="divide-white/10 text-sm font-medium leading-5 xl:col-start-1 xl:row-start-2 xl:divide-y">
                 {tags && (
                   <div className="py-4 xl:py-8">
-                    <h2 className="text-xs uppercase tracking-wide text-gray-400">{t('tags')}</h2>
+                    <h2 className="font-mono text-[11px] uppercase tracking-[0.08em] text-gray-400">
+                      {t('tags')}
+                    </h2>
                     <div className="flex flex-wrap">
                       {tags.map((tag) => (
                         <Tag key={tag} text={tag} />
@@ -110,20 +113,20 @@ export default function PostLayout({ content, next, prev, children }: LayoutProp
                   <div className="flex justify-between py-4 xl:block xl:space-y-8 xl:py-8">
                     {prev && prev.path && (
                       <div>
-                        <h2 className="text-xs uppercase tracking-wide text-gray-400">
+                        <h2 className="font-mono text-[11px] uppercase tracking-[0.08em] text-gray-400">
                           {t('previousArticle')}
                         </h2>
-                        <div className="text-sky-500 hover:text-sky-400">
+                        <div className="text-sky-300 hover:text-sky-200">
                           <Link href={`/${prev.path}`}>{prev.title}</Link>
                         </div>
                       </div>
                     )}
                     {next && next.path && (
                       <div>
-                        <h2 className="text-xs uppercase tracking-wide text-gray-400">
+                        <h2 className="font-mono text-[11px] uppercase tracking-[0.08em] text-gray-400">
                           {t('nextArticle')}
                         </h2>
-                        <div className="text-sky-500 hover:text-sky-400">
+                        <div className="text-sky-300 hover:text-sky-200">
                           <Link href={`/${next.path}`}>{next.title}</Link>
                         </div>
                       </div>
@@ -134,7 +137,7 @@ export default function PostLayout({ content, next, prev, children }: LayoutProp
               <div className="pt-4 xl:pt-8">
                 <Link
                   href={`/${basePath}`}
-                  className="text-sky-500 hover:text-sky-400"
+                  className="text-sky-300 hover:text-sky-200"
                   aria-label={t('backToBlog')}
                 >
                   &larr; {t('backToBlog')}
@@ -144,6 +147,6 @@ export default function PostLayout({ content, next, prev, children }: LayoutProp
           </div>
         </div>
       </article>
-    </SectionContainer>
+    </div>
   )
 }

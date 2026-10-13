@@ -10,6 +10,7 @@ import type { Blog } from 'contentlayer/generated'
 import Link from '@/components/Link'
 import Tag from '@/components/Tag'
 import tagData from 'app/tag-data.json'
+import PageHeader from '@/components/PageHeader'
 
 interface PaginationProps {
   totalPages: number
@@ -30,8 +31,8 @@ function Pagination({ totalPages, currentPage }: PaginationProps) {
   const nextPage = currentPage + 1 <= totalPages
 
   return (
-    <div className="space-y-2 pb-8 pt-6 md:space-y-5">
-      <nav className="flex justify-between">
+    <div className="pt-10">
+      <nav className="flex items-center justify-between font-mono text-xs uppercase tracking-[0.08em] text-gray-400 [&_a:hover]:text-sky-300 [&_a]:text-gray-100">
         {!prevPage && (
           <button className="cursor-auto disabled:opacity-50" disabled={!prevPage}>
             {t('previous')}
@@ -78,85 +79,85 @@ export default function ListLayoutWithTags({
 
   return (
     <>
-      <div>
-        <div className="pb-6 pt-6">
-          <h1 className="text-3xl font-extrabold leading-9 tracking-tight text-gray-100 sm:hidden sm:text-4xl sm:leading-10 md:text-6xl md:leading-14">
-            {title}
-          </h1>
-        </div>
-        <div className="flex sm:space-x-24">
-          <div className="hidden h-full max-h-screen min-w-[280px] max-w-[280px] flex-wrap overflow-auto rounded bg-gray-900/70 pt-5 shadow-md shadow-gray-800/40 sm:flex">
-            <div className="px-6 py-4">
-              {pathname.startsWith('/blog') ? (
-                <h3 className="font-bold uppercase text-sky-500">{t('allPosts')}</h3>
-              ) : (
-                <Link
-                  href={`/blog`}
-                  className="font-bold uppercase text-gray-300 hover:text-sky-500"
-                >
-                  {t('allPosts')}
-                </Link>
-              )}
-              <ul>
-                {sortedTags.map((t2) => {
-                  return (
-                    <li key={t2} className="my-3">
-                      {pathname.split('/tags/')[1] === slug(t2) ? (
-                        <h3 className="inline px-3 py-2 text-sm font-bold uppercase text-sky-500">
-                          {`${t2} (${tagCounts[t2]})`}
-                        </h3>
-                      ) : (
-                        <Link
-                          href={`/tags/${slug(t2)}`}
-                          className="px-3 py-2 text-sm font-medium uppercase text-gray-300 hover:text-sky-500"
-                          aria-label={t('viewPostsTagged', { tag: t2 })}
-                        >
-                          {`${t2} (${tagCounts[t2]})`}
-                        </Link>
-                      )}
-                    </li>
-                  )
-                })}
-              </ul>
-            </div>
-          </div>
-          <div>
-            <ul>
-              {displayPosts.map((post) => {
-                const { path, date, title, summary, tags } = post
+      <PageHeader eyebrow="Blog" title={title} />
+      <div className="grid gap-12 lg:grid-cols-[240px_minmax(0,1fr)] lg:gap-16">
+        <aside className="hidden lg:block">
+          <div className="sticky top-28 max-h-[calc(100vh-8rem)] overflow-auto pr-2">
+            {pathname.startsWith('/blog') ? (
+              <h3 className="eyebrow">{t('allPosts')}</h3>
+            ) : (
+              <Link
+                href={`/blog`}
+                className="font-mono text-[11px] uppercase tracking-[0.08em] text-gray-300 hover:text-sky-300"
+              >
+                {t('allPosts')}
+              </Link>
+            )}
+            <ul className="mt-4 border-l border-white/10">
+              {sortedTags.map((t2) => {
+                const isActive = pathname.split('/tags/')[1] === slug(t2)
                 return (
-                  <li key={path} className="py-5">
-                    <article className="flex flex-col space-y-2 xl:space-y-0">
-                      <dl>
-                        <dt className="sr-only">{t('publishedOn')}</dt>
-                        <dd className="text-base font-medium leading-6 text-gray-400">
-                          <time dateTime={date}>
-                            {formatDate(date, locale === 'pl' ? 'pl-PL' : 'en-US')}
-                          </time>
-                        </dd>
-                      </dl>
-                      <div className="space-y-3">
-                        <div>
-                          <h2 className="text-2xl font-bold leading-8 tracking-tight">
-                            <Link href={`/${path}`} className="text-gray-100">
-                              {title}
-                            </Link>
-                          </h2>
-                          <div className="flex flex-wrap">
-                            {tags?.map((tag) => <Tag key={tag} text={tag} />)}
-                          </div>
-                        </div>
-                        <div className="prose max-w-none text-gray-400">{summary}</div>
-                      </div>
-                    </article>
+                  <li key={t2}>
+                    {isActive ? (
+                      <h3 className="-ml-px border-l-2 border-sky-300 py-1.5 pl-3.5 font-mono text-xs uppercase tracking-[0.04em] text-sky-300">
+                        {`${t2} (${tagCounts[t2]})`}
+                      </h3>
+                    ) : (
+                      <Link
+                        href={`/tags/${slug(t2)}`}
+                        className="-ml-px block border-l-2 border-transparent py-1.5 pl-3.5 font-mono text-xs uppercase tracking-[0.04em] text-gray-400 transition-colors hover:text-gray-100"
+                        aria-label={t('viewPostsTagged', { tag: t2 })}
+                      >
+                        {`${t2} (${tagCounts[t2]})`}
+                      </Link>
+                    )}
                   </li>
                 )
               })}
             </ul>
-            {pagination && pagination.totalPages > 1 && (
-              <Pagination currentPage={pagination.currentPage} totalPages={pagination.totalPages} />
-            )}
           </div>
+        </aside>
+        <div className="min-w-0">
+          <ul className="border-t border-white/10">
+            {displayPosts.map((post) => {
+              const { path, date, title, summary, tags } = post
+              return (
+                <li key={path} className="border-b border-white/10 py-7">
+                  <article className="grid gap-2 sm:grid-cols-[130px_minmax(0,1fr)] sm:gap-6">
+                    <dl>
+                      <dt className="sr-only">{t('publishedOn')}</dt>
+                      <dd className="font-mono text-xs tracking-[0.04em] text-gray-400 sm:pt-2">
+                        <time dateTime={date}>
+                          {formatDate(date, locale === 'pl' ? 'pl-PL' : 'en-US')}
+                        </time>
+                      </dd>
+                    </dl>
+                    <div>
+                      <h2 className="text-[clamp(20px,2vw,26px)] font-bold leading-[1.15] tracking-[-0.02em]">
+                        <Link
+                          href={`/${path}`}
+                          className="text-white decoration-1 underline-offset-[5px] hover:underline"
+                        >
+                          {title}
+                        </Link>
+                      </h2>
+                      <p className="mt-2 text-[15px] text-gray-400">{summary}</p>
+                      {tags && tags.length > 0 && (
+                        <div className="mt-3 flex flex-wrap gap-y-1">
+                          {tags.map((tag) => (
+                            <Tag key={tag} text={tag} />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </article>
+                </li>
+              )
+            })}
+          </ul>
+          {pagination && pagination.totalPages > 1 && (
+            <Pagination currentPage={pagination.currentPage} totalPages={pagination.totalPages} />
+          )}
         </div>
       </div>
     </>

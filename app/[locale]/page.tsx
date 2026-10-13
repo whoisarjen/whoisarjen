@@ -27,11 +27,12 @@ export async function generateMetadata({
 
 export default async function Page({ params }: { params: { locale: string } }) {
   setRequestLocale(params.locale)
-  const posts = getPostsByLocale(params.locale).slice(0, siteMetadata.postsPerPage)
+  const allPosts = getPostsByLocale(params.locale)
+  const posts = allPosts.slice(0, siteMetadata.postsPerPage)
   const projects = await getProjects(params.locale)
   return (
     <>
-      <Main posts={posts} projects={projects} />
+      <Main posts={posts} postCount={allPosts.length} projects={projects} />
       <BeambackWidget />
     </>
   )

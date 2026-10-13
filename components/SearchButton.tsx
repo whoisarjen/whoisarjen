@@ -20,7 +20,7 @@ const SearchButton = () => {
           viewBox="0 0 24 24"
           strokeWidth={1.5}
           stroke="currentColor"
-          className="h-6 w-6 text-gray-100"
+          className="h-5 w-5 text-gray-300"
         >
           <path
             strokeLinecap="round"

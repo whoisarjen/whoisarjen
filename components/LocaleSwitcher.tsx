@@ -10,10 +10,10 @@ export default function LocaleSwitcher() {
   const pathname = usePathname()
 
   return (
-    <div className="flex items-center gap-2 text-sm font-medium">
+    <div className="flex items-center gap-2 font-mono text-xs">
       {locales.map((locale) =>
         locale === currentLocale ? (
-          <span key={locale} className="uppercase text-sky-500">
+          <span key={locale} className="uppercase text-sky-300">
             {locale}
           </span>
         ) : (

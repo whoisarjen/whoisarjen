@@ -142,6 +142,16 @@ const extraProjects: Project[] = [
     techStack: ['React', 'TypeScript'],
   },
   {
+    title: 'Digital Nomad',
+    description:
+      'Compare 500+ cities by cost of living, weather, internet speed, safety and more, filtered to what matters most to you. Built for digital nomads, remote workers and expats.',
+    descriptionPl:
+      'Porównaj ponad 500 miast pod kątem kosztów życia, pogody, szybkości internetu i bezpieczeństwa, z filtrami dopasowanymi do tego, co dla Ciebie ważne.',
+    imgSrc: '/static/images/projects/project-digital-nomad.png',
+    href: 'https://nomad.whoisarjen.com',
+    techStack: ['Nuxt 3', 'Vue 3', 'TypeScript', 'Prisma', 'PostgreSQL'],
+  },
+  {
     title: 'Arjenworld',
     description:
       'My blog documenting my life journey and being my SEO strategies experiment place, which was successfully sold.',

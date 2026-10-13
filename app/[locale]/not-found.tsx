@@ -22,7 +22,7 @@ export default function NotFound() {
         gap: '1.5rem',
         padding: '1.5rem',
         textAlign: 'center',
-        backgroundColor: '#030712',
+        backgroundColor: '#0a0d10',
         color: '#f3f4f6',
         fontFamily:
           '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
@@ -59,12 +59,12 @@ export default function NotFound() {
           style={{
             display: 'inline-block',
             borderRadius: '0.5rem',
-            backgroundColor: '#0ea5e9',
+            backgroundColor: '#7dd3fc',
             padding: '0.5rem 1rem',
             fontSize: '0.875rem',
             fontWeight: 500,
             lineHeight: '1.25rem',
-            color: '#ffffff',
+            color: '#0a0d10',
             textDecoration: 'none',
           }}
           className="inline rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium leading-5 text-white shadow transition-colors duration-150 hover:bg-sky-600 focus:outline-none"

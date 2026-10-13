@@ -1,14 +1,13 @@
 import 'css/tailwind.css'
 import 'pliny/search/algolia.css'
 
-import { Inter } from 'next/font/google'
+import { Inter_Tight, JetBrains_Mono } from 'next/font/google'
 import { Analytics, AnalyticsConfig } from 'pliny/analytics'
 import { SearchProvider, SearchConfig } from 'pliny/search'
 import { NextIntlClientProvider } from 'next-intl'
 import { getMessages, getTranslations, setRequestLocale } from 'next-intl/server'
 import { notFound } from 'next/navigation'
 import Header from '@/components/Header'
-import SectionContainer from '@/components/SectionContainer'
 import Footer from '@/components/Footer'
 import siteMetadata from '@/data/siteMetadata'
 import { routing } from 'i18n/routing'
@@ -16,10 +15,17 @@ import { ThemeProviders } from '../theme-providers'
 import { Metadata } from 'next'
 import Script from 'next/script'
 
-const space_grotesk = Inter({
+const sans = Inter_Tight({
   subsets: ['latin', 'latin-ext'],
   display: 'swap',
-  variable: '--font-inter',
+  variable: '--font-sans',
+})
+
+const mono = JetBrains_Mono({
+  subsets: ['latin', 'latin-ext'],
+  weight: ['400', '500'],
+  display: 'swap',
+  variable: '--font-mono',
 })
 
 export function generateStaticParams() {
@@ -99,7 +105,7 @@ export default async function RootLayout({
   return (
     <html
       lang={locale}
-      className={`${space_grotesk.variable} dark scroll-smooth`}
+      className={`${sans.variable} ${mono.variable} dark scroll-smooth`}
       suppressHydrationWarning
     >
       <link rel="apple-touch-icon" sizes="76x76" href="/static/favicons/apple-touch-icon.png" />
@@ -108,22 +114,20 @@ export default async function RootLayout({
       <link rel="manifest" href="/static/favicons/site.webmanifest" />
       <link rel="mask-icon" href="/static/favicons/safari-pinned-tab.svg" color="#5bbad5" />
       <meta name="msapplication-TileColor" content="#000000" />
-      <meta name="theme-color" content="#030712" />
+      <meta name="theme-color" content="#0a0d10" />
       <link rel="alternate" type="application/rss+xml" href={feedPath} />
       <Script src={`https://cdn-cookieyes.com/client_data/${siteMetadata.cookieyes}/script.js`} />
-      <body className="overflow-x-hidden bg-gray-950 text-gray-100 antialiased">
+      <body className="overflow-x-clip bg-ink font-sans text-gray-100 antialiased">
         <ThemeProviders>
           <NextIntlClientProvider messages={messages}>
             <Analytics analyticsConfig={siteMetadata.analytics as AnalyticsConfig} />
-            <SectionContainer>
-              <div className="flex h-screen flex-col justify-between font-sans">
-                <SearchProvider searchConfig={searchConfig}>
-                  <Header />
-                  <main className="mb-auto">{children}</main>
-                </SearchProvider>
-                <Footer />
-              </div>
-            </SectionContainer>
+            <div className="flex min-h-screen flex-col">
+              <SearchProvider searchConfig={searchConfig}>
+                <Header />
+                <main className="flex-1">{children}</main>
+              </SearchProvider>
+              <Footer />
+            </div>
           </NextIntlClientProvider>
         </ThemeProviders>
       </body>

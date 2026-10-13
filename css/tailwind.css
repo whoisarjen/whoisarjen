@@ -49,3 +49,43 @@ input:-webkit-autofill:focus {
   display: inline-block;
   vertical-align: middle;
 }
+
+@layer components {
+  .eyebrow {
+    @apply font-mono text-[11px] uppercase tracking-[0.08em] text-sky-300;
+  }
+  .display {
+    @apply font-bold uppercase leading-[0.92] tracking-[-0.035em];
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-[22px] py-[13px] text-[15px] font-semibold transition-[transform,background-color,color,box-shadow] duration-200 ease-out-strong active:scale-[0.97];
+  }
+  .btn-accent {
+    @apply bg-sky-300 text-ink hover:bg-sky-200;
+  }
+  .btn-ghost {
+    @apply text-gray-100 shadow-[inset_0_0_0_1px_rgb(255_255_255/0.3)] hover:text-sky-300 hover:shadow-[inset_0_0_0_1px_theme(colors.sky.300)];
+  }
+  .btn-ink {
+    @apply bg-ink text-bone hover:bg-ink-3;
+  }
+}
+
+.rise {
+  opacity: 0;
+  transform: translateY(18px);
+  transition:
+    opacity 0.7s cubic-bezier(0.23, 1, 0.32, 1),
+    transform 0.7s cubic-bezier(0.23, 1, 0.32, 1);
+}
+.rise.in {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise {
+    transform: none;
+    transition: opacity 0.3s ease;
+  }
+}

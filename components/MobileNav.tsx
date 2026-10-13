@@ -28,7 +28,7 @@ const MobileNav = () => {
           xmlns="http://www.w3.org/2000/svg"
           viewBox="0 0 20 20"
           fill="currentColor"
-          className="h-8 w-8 text-gray-100"
+          className="h-7 w-7 text-gray-100"
         >
           <path
             fillRule="evenodd"
@@ -38,16 +38,12 @@ const MobileNav = () => {
         </svg>
       </button>
       <div
-        className={`fixed left-0 top-0 z-10 h-full w-full transform bg-gray-950 opacity-[0.98] duration-300 ease-in-out ${
+        className={`fixed left-0 top-0 z-10 h-full w-full transform bg-ink opacity-[0.98] duration-300 ease-in-out ${
           navShow ? 'translate-x-0' : 'translate-x-full'
         }`}
       >
         <div className="flex justify-end">
-          <button
-            className="mr-8 mt-11 h-8 w-8"
-            aria-label={tc('toggleMenu')}
-            onClick={onToggleNav}
-          >
+          <button className="mr-5 mt-4 h-8 w-8" aria-label={tc('toggleMenu')} onClick={onToggleNav}>
             <svg
               xmlns="http://www.w3.org/2000/svg"
               viewBox="0 0 20 20"
@@ -67,7 +63,7 @@ const MobileNav = () => {
             <div key={link.key} className="px-12 py-4">
               <Link
                 href={link.href}
-                className="text-2xl font-bold tracking-widest text-gray-100"
+                className="text-3xl font-bold uppercase tracking-tight text-gray-100"
                 onClick={onToggleNav}
               >
                 {t(link.key)}

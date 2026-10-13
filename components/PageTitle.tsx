@@ -6,7 +6,7 @@ interface Props {
 
 export default function PageTitle({ children }: Props) {
   return (
-    <h1 className="text-3xl font-extrabold leading-9 tracking-tight text-gray-100 sm:text-4xl sm:leading-10 md:text-5xl md:leading-14">
+    <h1 className="text-[clamp(32px,4.4vw,60px)] font-bold leading-[1.04] tracking-[-0.035em] text-white">
       {children}
     </h1>
   )
