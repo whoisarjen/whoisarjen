@@ -55,8 +55,7 @@ export async function generateMetadata({
     }
   })
 
-  const enUrl = `${siteMetadata.siteUrl}/blog/${slug}`
-  const plUrl = `${siteMetadata.siteUrl}/pl/blog/${slug}`
+  const url = `${siteMetadata.siteUrl}/blog/${slug}`
 
   return {
     title: post.title,
@@ -65,7 +64,7 @@ export async function generateMetadata({
       title: post.title,
       description: post.summary,
       siteName: siteMetadata.title,
-      locale: locale === 'pl' ? 'pl_PL' : 'en_US',
+      locale: 'en_US',
       type: 'article',
       publishedTime: publishedAt,
       modifiedTime: modifiedAt,
@@ -74,8 +73,7 @@ export async function generateMetadata({
       authors: authors.length > 0 ? authors : [siteMetadata.author],
     },
     alternates: {
-      canonical: locale === 'pl' ? plUrl : enUrl,
-      languages: { en: enUrl, pl: plUrl, 'x-default': enUrl },
+      canonical: url,
     },
     twitter: {
       card: 'summary_large_image',

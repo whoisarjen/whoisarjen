@@ -85,6 +85,12 @@ module.exports = () => {
         },
       ],
     },
+    async redirects() {
+      return [
+        { source: '/pl', destination: '/', permanent: true },
+        { source: '/pl/:path*', destination: '/:path*', permanent: true },
+      ]
+    },
     async headers() {
       return [
         {

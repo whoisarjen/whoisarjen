@@ -127,9 +127,7 @@ export default function ListLayoutWithTags({
                     <dl>
                       <dt className="sr-only">{t('publishedOn')}</dt>
                       <dd className="font-mono text-xs tracking-[0.04em] text-gray-400 sm:pt-2">
-                        <time dateTime={date}>
-                          {formatDate(date, locale === 'pl' ? 'pl-PL' : 'en-US')}
-                        </time>
+                        <time dateTime={date}>{formatDate(date, 'en-US')}</time>
                       </dd>
                     </dl>
                     <div>

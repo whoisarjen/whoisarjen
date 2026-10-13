@@ -39,7 +39,6 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { locale } = params
   const t = await getTranslations({ locale, namespace: 'metadata' })
-  const feedPath = locale === 'pl' ? '/pl/feed.xml' : '/feed.xml'
   return {
     metadataBase: new URL(siteMetadata.siteUrl),
     title: {
@@ -53,13 +52,13 @@ export async function generateMetadata({
       url: './',
       siteName: siteMetadata.title,
       images: [siteMetadata.socialBanner],
-      locale: locale === 'pl' ? 'pl_PL' : 'en_US',
+      locale: 'en_US',
       type: 'website',
     },
     alternates: {
       canonical: './',
       types: {
-        'application/rss+xml': `${siteMetadata.siteUrl}${feedPath}`,
+        'application/rss+xml': `${siteMetadata.siteUrl}/feed.xml`,
       },
     },
     robots: {
@@ -94,13 +93,7 @@ export default async function RootLayout({
   }
   setRequestLocale(locale)
   const messages = await getMessages()
-  const searchConfig = {
-    ...siteMetadata.search,
-    kbarConfig: {
-      searchDocumentsPath: locale === 'pl' ? 'search-pl.json' : 'search.json',
-    },
-  } as SearchConfig
-  const feedPath = locale === 'pl' ? '/pl/feed.xml' : '/feed.xml'
+  const searchConfig = siteMetadata.search as SearchConfig
 
   return (
     <html
@@ -115,7 +108,7 @@ export default async function RootLayout({
       <link rel="mask-icon" href="/static/favicons/safari-pinned-tab.svg" color="#5bbad5" />
       <meta name="msapplication-TileColor" content="#000000" />
       <meta name="theme-color" content="#0a0d10" />
-      <link rel="alternate" type="application/rss+xml" href={feedPath} />
+      <link rel="alternate" type="application/rss+xml" href="/feed.xml" />
       <Script src={`https://cdn-cookieyes.com/client_data/${siteMetadata.cookieyes}/script.js`} />
       <body className="overflow-x-clip bg-ink font-sans text-gray-100 antialiased">
         <ThemeProviders>

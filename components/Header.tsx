@@ -2,7 +2,6 @@ import headerNavLinks from '@/data/headerNavLinks'
 import Link from './Link'
 import MobileNav from './MobileNav'
 import SearchButton from './SearchButton'
-import LocaleSwitcher from './LocaleSwitcher'
 import { useTranslations } from 'next-intl'
 
 const Header = () => {
@@ -28,7 +27,6 @@ const Header = () => {
               </Link>
             ))}
         </nav>
-        <LocaleSwitcher />
         <SearchButton />
         <Link
           href="/hire"

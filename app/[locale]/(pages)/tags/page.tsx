@@ -15,7 +15,6 @@ export async function generateMetadata({
   return genPageMetadata({
     title: t('title'),
     description: t('description'),
-    locale: params.locale,
     path: '/tags',
   })
 }

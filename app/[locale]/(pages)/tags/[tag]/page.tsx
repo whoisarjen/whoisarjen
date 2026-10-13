@@ -18,11 +18,10 @@ export async function generateMetadata({
   return genPageMetadata({
     title: tag,
     description: t('tagDescription', { title: siteMetadata.title, tag }),
-    locale: params.locale,
     path: `/tags/${tag}`,
     alternates: {
       types: {
-        'application/rss+xml': `${siteMetadata.siteUrl}${params.locale === 'pl' ? '/pl' : ''}/tags/${tag}/feed.xml`,
+        'application/rss+xml': `${siteMetadata.siteUrl}/tags/${tag}/feed.xml`,
       },
     },
   })

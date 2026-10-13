@@ -44,10 +44,7 @@ export default function PostLayout({ content, next, prev, children }: LayoutProp
                   <dt className="sr-only">{t('publishedOn')}</dt>
                   <dd className="font-mono text-xs uppercase tracking-[0.08em] text-sky-300">
                     <time dateTime={date}>
-                      {new Date(date).toLocaleDateString(
-                        locale === 'pl' ? 'pl-PL' : 'en-US',
-                        postDateTemplate
-                      )}
+                      {new Date(date).toLocaleDateString('en-US', postDateTemplate)}
                     </time>
                   </dd>
                 </div>

@@ -252,7 +252,7 @@ export default function Home({ posts, postCount, projects }) {
                   dateTime={date}
                   className="font-mono text-xs tracking-[0.04em] text-[#4f5752]"
                 >
-                  {formatDate(date, locale === 'pl' ? 'pl-PL' : 'en-US')}
+                  {formatDate(date, 'en-US')}
                 </time>
                 <div>
                   <h3 className="mb-1.5 text-[clamp(20px,2vw,26px)] font-bold leading-[1.15] tracking-[-0.02em] decoration-1 underline-offset-[5px] group-hover:underline">

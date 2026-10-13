@@ -99,29 +99,11 @@ tags: ['Tag1', 'Tag2', 'Tag3'] # 5-7 tags
 3. Ensure date is not in the future (UTC)
 4. Push and verify the Vercel build succeeds and the post appears on /blog
 
-## Internationalization (PL/EN)
+## Language
 
-The site is bilingual: EN at root URLs (default, x-default), PL under `/pl`. Routing: next-intl
-(`i18n/routing.ts`, `middleware.ts`), `localePrefix: 'as-needed'`. UI strings live in
-`messages/en.json` + `messages/pl.json` — every new UI string goes into BOTH files.
+The site is English only. next-intl stays wired with a single `en` locale (`i18n/routing.ts`), so UI strings
+still live in `messages/en.json`. The former Polish version is gone: `/pl` and `/pl/*` permanently redirect
+to the English URLs (`next.config.js`). Do not add a second locale back without restoring hreflang, sitemap
+alternates and per-locale RSS/search.
 
-### Blog post rules (enforced by a production build gate)
-
-- Every EN post `data/blog/<name>.mdx` MUST have a PL twin `data/blog/pl/<name>.mdx`
-  (same filename, same slug). `yarn build` FAILS otherwise — no EN-only publishing.
-- PL frontmatter: `title`/`summary` translated; `date`, `lastmod`, `tags` copied exactly.
-  Tags stay English in both languages (shared taxonomy).
-- Fenced code blocks must be BYTE-IDENTICAL between EN and PL (build-gate-enforced).
-  Inline code should match too (checker/review convention, not gate-enforced).
-  Editing a code block in one language means editing both files.
-- Translation register: see `scripts/translation-style-guide.md`.
-- Quick check without a build: `node scripts/check-i18n-parity.mjs` (`--strict` for launch parity).
-- All MDX pitfalls above apply to PL files too.
-
-### Other i18n rules
-
-- New projects in `data/projectsData.ts` need a `descriptionPl` override.
-- New routes go under `app/[locale]/` with `setRequestLocale(params.locale)` and
-  `genPageMetadata({ locale, path })` for hreflang.
-- RSS: `public/feed.xml` (EN) + `public/pl/feed.xml` (PL). Search: `search.json` + `search-pl.json`.
 - Blog slugs must not contain dots — the middleware matcher treats dotted paths as static assets.

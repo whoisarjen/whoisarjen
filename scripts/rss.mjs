@@ -4,7 +4,6 @@ import { slug } from 'github-slugger'
 import { escape } from 'pliny/utils/htmlEscaper.js'
 import siteMetadata from '../data/siteMetadata.js'
 import tagData from '../app/tag-data.json' with { type: 'json' }
-import plMessages from '../messages/pl.json' with { type: 'json' }
 import { allBlogs } from '../.contentlayer/generated/index.mjs'
 import { sortPosts } from 'pliny/utils/contentlayer.js'
 
@@ -36,15 +35,13 @@ const generateRss = (config, posts, page, localePrefix, language, description) =
   </rss>
 `
 
-async function generateRSSForLocale(config, posts, locale) {
-  const localePrefix = locale === 'pl' ? '/pl' : ''
-  const language = locale === 'pl' ? 'pl' : config.language
-  const description = locale === 'pl' ? plMessages.metadata.description : config.description
+async function generateRSSForLocale(config, posts) {
+  const localePrefix = ''
+  const { language, description } = config
   const publishPosts = posts.filter((post) => post.draft !== true)
   if (publishPosts.length === 0) return
 
-  const feedPath = locale === 'pl' ? 'pl/feed.xml' : 'feed.xml'
-  mkdirSync(path.dirname(path.join('public', feedPath)), { recursive: true })
+  const feedPath = 'feed.xml'
   writeFileSync(
     path.join('public', feedPath),
     generateRss(config, sortPosts(publishPosts), feedPath, localePrefix, language, description)
@@ -53,10 +50,7 @@ async function generateRSSForLocale(config, posts, locale) {
   for (const tag of Object.keys(tagData)) {
     const filteredPosts = publishPosts.filter((post) => post.tags.map((t) => slug(t)).includes(tag))
     if (filteredPosts.length === 0) continue
-    const tagFeedPath =
-      locale === 'pl'
-        ? path.join('pl', 'tags', tag, 'feed.xml')
-        : path.join('tags', tag, 'feed.xml')
+    const tagFeedPath = path.join('tags', tag, 'feed.xml')
     mkdirSync(path.dirname(path.join('public', tagFeedPath)), { recursive: true })
     writeFileSync(
       path.join('public', tagFeedPath),
@@ -68,13 +62,7 @@ async function generateRSSForLocale(config, posts, locale) {
 const rss = () => {
   generateRSSForLocale(
     siteMetadata,
-    allBlogs.filter((p) => p.locale === 'en'),
-    'en'
-  )
-  generateRSSForLocale(
-    siteMetadata,
-    allBlogs.filter((p) => p.locale === 'pl'),
-    'pl'
+    allBlogs.filter((p) => p.locale === 'en')
   )
   console.log('RSS feeds generated...')
 }

@@ -14,7 +14,6 @@ export async function generateMetadata({
   return genPageMetadata({
     title: t('metaTitle'),
     description: t('metaDescription'),
-    locale: params.locale,
     path: '/hire',
   })
 }

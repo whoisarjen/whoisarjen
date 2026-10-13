@@ -12,14 +12,14 @@ export async function generateMetadata({
   params: { locale: string }
 }): Promise<Metadata> {
   const t = await getTranslations({ locale: params.locale, namespace: 'projects' })
-  return genPageMetadata({ title: t('title'), locale: params.locale, path: '/projects' })
+  return genPageMetadata({ title: t('title'), path: '/projects' })
 }
 
 export default async function Projects({ params }: { params: { locale: string } }) {
   setRequestLocale(params.locale)
   const t = await getTranslations('projects')
   const tNav = await getTranslations('nav')
-  const projectsData = await getProjects(params.locale)
+  const projectsData = await getProjects()
 
   return (
     <div>

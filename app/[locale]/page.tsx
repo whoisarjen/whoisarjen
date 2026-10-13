@@ -8,19 +8,11 @@ import { BeambackWidget } from '@/components/BeambackWidget'
 
 export const revalidate = 86400 // 1 day
 
-export async function generateMetadata({
-  params,
-}: {
-  params: { locale: string }
-}): Promise<Metadata> {
-  const enUrl = siteMetadata.siteUrl
-  const plUrl = `${siteMetadata.siteUrl}/pl`
-  const feedPath = params.locale === 'pl' ? '/pl/feed.xml' : '/feed.xml'
+export async function generateMetadata(): Promise<Metadata> {
   return {
     alternates: {
-      canonical: params.locale === 'pl' ? plUrl : enUrl,
-      languages: { en: enUrl, pl: plUrl, 'x-default': enUrl },
-      types: { 'application/rss+xml': `${siteMetadata.siteUrl}${feedPath}` },
+      canonical: siteMetadata.siteUrl,
+      types: { 'application/rss+xml': `${siteMetadata.siteUrl}/feed.xml` },
     },
   }
 }
@@ -29,7 +21,7 @@ export default async function Page({ params }: { params: { locale: string } }) {
   setRequestLocale(params.locale)
   const allPosts = getPostsByLocale(params.locale)
   const posts = allPosts.slice(0, siteMetadata.postsPerPage)
-  const projects = await getProjects(params.locale)
+  const projects = await getProjects()
   return (
     <>
       <Main posts={posts} postCount={allPosts.length} projects={projects} />

@@ -86,19 +86,11 @@ function createSearchIndex(allBlogs) {
     siteMetadata.search.kbarConfig.searchDocumentsPath
   ) {
     const enBlogs = allBlogs.filter((b) => b.locale === 'en')
-    const plBlogs = allBlogs.filter((b) => b.locale === 'pl')
     writeFileSync(
       `public/${siteMetadata.search.kbarConfig.searchDocumentsPath}`,
       JSON.stringify(allCoreContent(sortPosts(enBlogs)))
     )
-    // kbar navigates via router.push(doc.path), which is not locale-aware —
-    // so the PL index carries pl-prefixed paths.
-    const plDocs = allCoreContent(sortPosts(plBlogs)).map((doc) => ({
-      ...doc,
-      path: `pl/${doc.path}`,
-    }))
-    writeFileSync('public/search-pl.json', JSON.stringify(plDocs))
-    console.log('Local search indexes generated...')
+    console.log('Local search index generated...')
   }
 }
 
@@ -124,8 +116,7 @@ export const Blog = defineDocumentType(() => ({
     structuredData: {
       type: 'json',
       resolve: (doc) => {
-        const isPl = doc._raw.flattenedPath.startsWith('blog/pl/')
-        const slug = doc._raw.flattenedPath.replace(/^blog\/(pl\/)?/, '')
+        const slug = doc._raw.flattenedPath.replace(/^blog\//, '')
         return {
           '@context': 'https://schema.org',
           '@type': 'BlogPosting',
@@ -133,9 +124,9 @@ export const Blog = defineDocumentType(() => ({
           datePublished: doc.date,
           dateModified: doc.lastmod || doc.date,
           description: doc.summary,
-          inLanguage: isPl ? 'pl-PL' : 'en-US',
+          inLanguage: 'en-US',
           image: doc.images ? doc.images[0] : siteMetadata.socialBanner,
-          url: `${siteMetadata.siteUrl}${isPl ? '/pl' : ''}/blog/${slug}`,
+          url: `${siteMetadata.siteUrl}/blog/${slug}`,
         }
       },
     },
@@ -160,40 +151,6 @@ export const Authors = defineDocumentType(() => ({
   },
   computedFields,
 }))
-
-/**
- * Big-bang i18n gate: production builds fail unless every non-draft EN post
- * has a PL twin (and vice versa) with byte-identical code blocks.
- * Dev builds skip this so translation work can proceed incrementally.
- */
-function assertI18nParity(allBlogs) {
-  if (!isProduction) return
-  const en = allBlogs.filter((b) => b.locale === 'en' && b.draft !== true)
-  const pl = allBlogs.filter((b) => b.locale === 'pl' && b.draft !== true)
-  const enSlugs = new Set(en.map((b) => b.slug))
-  const plSlugs = new Set(pl.map((b) => b.slug))
-  const problems: string[] = []
-  for (const b of en) if (!plSlugs.has(b.slug)) problems.push(`Missing PL translation for: ${b.slug}`)
-  for (const b of pl) if (!enSlugs.has(b.slug)) problems.push(`PL post has no EN source: ${b.slug}`)
-  const fences = (raw: string) => raw.match(/```[\s\S]*?```/g) ?? []
-  for (const enPost of en) {
-    const plPost = pl.find((b) => b.slug === enPost.slug)
-    if (!plPost) continue
-    const enF = fences(enPost.body.raw)
-    const plF = fences(plPost.body.raw)
-    if (enF.length !== plF.length) {
-      problems.push(`${enPost.slug}: code block count differs (EN ${enF.length} vs PL ${plF.length})`)
-    } else {
-      enF.forEach((fence, i) => {
-        if (fence !== plF[i]) problems.push(`${enPost.slug}: code block #${i + 1} differs between EN and PL`)
-      })
-    }
-  }
-  if (problems.length > 0) {
-    throw new Error(`i18n parity check failed:\n${problems.map((p) => `  - ${p}`).join('\n')}`)
-  }
-  console.log('i18n parity check passed.')
-}
 
 export default makeSource({
   contentDirPath: 'data',
@@ -227,7 +184,6 @@ export default makeSource({
   },
   onSuccess: async (importData) => {
     const { allBlogs } = await importData()
-    assertI18nParity(allBlogs)
     createTagCount(allBlogs)
     createSearchIndex(allBlogs)
   },

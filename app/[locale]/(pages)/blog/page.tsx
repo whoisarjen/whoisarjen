@@ -10,7 +10,7 @@ export async function generateMetadata({
 }: {
   params: { locale: string }
 }): Promise<Metadata> {
-  return genPageMetadata({ title: 'Blog', locale: params.locale, path: '/blog' })
+  return genPageMetadata({ title: 'Blog', path: '/blog' })
 }
 
 export default async function BlogPage({ params }: { params: { locale: string } }) {
