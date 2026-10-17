@@ -26,22 +26,23 @@ I'm a full-stack engineer who ships products and obsesses over performance. I bu
 
 ### What I Ship
 
-| Project | Description | Status |
-|---------|-------------|--------|
-| [**Comscore**](https://www.comscore.com) | Cross-platform audience analytics and advertising evaluation services | `Active` |
-| [**Deante**](https://deante.pl) | Multi-market e-commerce platform (13 languages, full-text search, Redis caching) | `Active` |
-| [**Deante Design Studio**](https://deantedesign.studio) | 3D models, bathroom & kitchen collections, and design resources for architects | `Active` |
-| [**Juicify**](https://juicify.whoisarjen.com) | AI-powered fitness & nutrition platform | `Active` |
-| [**Digital Nomad**](https://nomad.whoisarjen.com) | Compare 500+ cities for digital nomads and remote workers | `Active` |
-| [**Ratio**](https://ratio.whoisarjen.com) | Open source Polish B2B tax calculator — compare tax forms, ZUS, IP BOX | `Active` |
-| [**Logify**](https://logify.whoisarjen.com) | Open source log management — ingest, search, and visualize logs in real-time | `Active` |
-| [**Vigil**](https://vigil.whoisarjen.com) | Open source cron monitoring | `Active` |
-| [**RiftLens**](https://riftlens.whoisarjen.com) | Open source League of Legends analytics platform | `Active` |
-| [**Parallax**](https://parallax.whoisarjen.com) | Next-gen estimation engine for Jira — multi-perspective complexity analysis | `Active` |
-| [**MyPress**](https://mypress.whoisarjen.com) | Open source self-publishing platform — publish & sell books with 2% fee | `Active` |
-| [**Investo**](https://investo.whoisarjen.com) | Open source ETF investment tracker — track your portfolio locally | `Active` |
-| [**Beamback**](https://beamback.whoisarjen.com) | Open-source feedback collection — one script tag gives you a widget, voting board, and roadmap | `Active` |
-| [**whoisarjen.com**](https://whoisarjen.com) | Technical blog — deep-dive articles on performance & architecture | `Active` |
+| Project                                                 | Description                                                                                    | Status   |
+| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------- |
+| [**Comscore**](https://www.comscore.com)                | Cross-platform audience analytics and advertising evaluation services                          | `Active` |
+| [**Deante**](https://deante.pl)                         | Multi-market e-commerce platform (13 languages, full-text search, Redis caching)               | `Active` |
+| [**Deante Design Studio**](https://deantedesign.studio) | 3D models, bathroom & kitchen collections, and design resources for architects                 | `Active` |
+| [**Juicify**](https://juicify.whoisarjen.com)           | AI-powered fitness & nutrition platform                                                        | `Active` |
+| [**Digital Nomad**](https://nomad.whoisarjen.com)       | Compare 500+ cities for digital nomads and remote workers                                      | `Active` |
+| [**Ancient Blessing**](https://ancientblessing.com)     | Shopify store for intention bracelets, tarot, pendulums and runes                              | `Active` |
+| [**Ratio**](https://ratio.whoisarjen.com)               | Open source Polish B2B tax calculator — compare tax forms, ZUS, IP BOX                         | `Active` |
+| [**Logify**](https://logify.whoisarjen.com)             | Open source log management — ingest, search, and visualize logs in real-time                   | `Active` |
+| [**Vigil**](https://vigil.whoisarjen.com)               | Open source cron monitoring                                                                    | `Active` |
+| [**RiftLens**](https://riftlens.whoisarjen.com)         | Open source League of Legends analytics platform                                               | `Active` |
+| [**Parallax**](https://parallax.whoisarjen.com)         | Next-gen estimation engine for Jira — multi-perspective complexity analysis                    | `Active` |
+| [**MyPress**](https://mypress.whoisarjen.com)           | Open source self-publishing platform — publish & sell books with 2% fee                        | `Active` |
+| [**Investo**](https://investo.whoisarjen.com)           | Open source ETF investment tracker — track your portfolio locally                              | `Active` |
+| [**Beamback**](https://beamback.whoisarjen.com)         | Open-source feedback collection — one script tag gives you a widget, voting board, and roadmap | `Active` |
+| [**whoisarjen.com**](https://whoisarjen.com)            | Technical blog — deep-dive articles on performance & architecture                              | `Active` |
 
 ---
 

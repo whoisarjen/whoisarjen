@@ -11,6 +11,9 @@ export default function Footer() {
         <Link href={`mailto:${siteMetadata.email}`} className="hover:text-sky-300">
           {siteMetadata.email}
         </Link>
+        <Link href="https://ancientblessing.com" className="hover:text-sky-300">
+          Ancient Blessing
+        </Link>
         <Link href={siteMetadata.github || '#'} className="hover:text-sky-300">
           GitHub
         </Link>

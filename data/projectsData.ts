@@ -21,6 +21,7 @@ const highlightedProjects: string[] = [
   'Deante Design Studio',
   'Juicify Open Source',
   'Digital Nomad',
+  'Ancient Blessing',
   'Logify',
   'Ratio',
 ]
@@ -123,6 +124,14 @@ const extraProjects: Project[] = [
     imgSrc: '/static/images/projects/project-digital-nomad.png',
     href: 'https://nomad.whoisarjen.com',
     techStack: ['Nuxt 3', 'Vue 3', 'TypeScript', 'Prisma', 'PostgreSQL'],
+  },
+  {
+    title: 'Ancient Blessing',
+    description:
+      'Shopify store for intention bracelets, tarot decks, pendulums, runes and dreamcatchers, each with the story of its tradition.',
+    imgSrc: '/static/images/projects/project-ancient-blessing.png',
+    href: 'https://ancientblessing.com',
+    techStack: ['Shopify', 'Liquid', 'E-commerce'],
   },
   {
     title: 'Arjenworld',
