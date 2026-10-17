@@ -8,7 +8,14 @@ import ProjectCarousel from '@/components/home/ProjectCarousel'
 import RiseObserver from '@/components/home/RiseObserver'
 
 const MAX_POSTS_DISPLAY = 6
-const FEATURED_PROJECTS = ['Deante', 'Deante Design Studio', 'Comscore', 'Digital Nomad', 'Juicify']
+const FEATURED_PROJECTS = [
+  'Ancient Blessing',
+  'Deante',
+  'Deante Design Studio',
+  'Comscore',
+  'Digital Nomad',
+  'Juicify',
+]
 
 const techStack = [
   'TypeScript',
