@@ -9,7 +9,7 @@ import RiseObserver from '@/components/home/RiseObserver'
 
 const MAX_POSTS_DISPLAY = 6
 const FEATURED_PROJECTS = [
-  'Ancient Blessing',
+  'Pradawne Dary',
   'Deante',
   'Deante Design Studio',
   'Comscore',

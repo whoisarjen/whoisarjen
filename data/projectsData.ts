@@ -21,7 +21,7 @@ const highlightedProjects: string[] = [
   'Deante Design Studio',
   'Juicify Open Source',
   'Digital Nomad',
-  'Ancient Blessing',
+  'Pradawne Dary',
   'Logify',
   'Ratio',
 ]
@@ -126,12 +126,20 @@ const extraProjects: Project[] = [
     techStack: ['Nuxt 3', 'Vue 3', 'TypeScript', 'Prisma', 'PostgreSQL'],
   },
   {
-    title: 'Ancient Blessing',
+    title: 'Pradawne Dary',
     description:
-      'Shopify store for intention bracelets, tarot decks, pendulums, runes and dreamcatchers, each with the story of its tradition.',
-    imgSrc: '/static/images/projects/project-ancient-blessing.png',
-    href: 'https://ancientblessing.com',
+      'Polish Shopify store for tarot decks, runes, pendulums, intention bracelets and dreamcatchers, each with the story of its tradition.',
+    imgSrc: '/static/images/projects/project-pradawne-dary.png',
+    href: 'https://pradawnedary.pl',
     techStack: ['Shopify', 'Liquid', 'E-commerce'],
+  },
+  {
+    title: 'Fuoco e Paura',
+    description:
+      'Polish-language AC Milan news blog run autonomously by AI: first team news, transfers, injuries, fixtures and the Serie A table.',
+    imgSrc: '/static/images/projects/project-fuoco-e-paura.png',
+    href: 'https://fuocoepaura.pl',
+    techStack: ['Nuxt', 'Vue', 'AI'],
   },
   {
     title: 'Arjenworld',

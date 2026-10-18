@@ -33,7 +33,8 @@ I'm a full-stack engineer who ships products and obsesses over performance. I bu
 | [**Deante Design Studio**](https://deantedesign.studio) | 3D models, bathroom & kitchen collections, and design resources for architects                 | `Active` |
 | [**Juicify**](https://juicify.whoisarjen.com)           | AI-powered fitness & nutrition platform                                                        | `Active` |
 | [**Digital Nomad**](https://nomad.whoisarjen.com)       | Compare 500+ cities for digital nomads and remote workers                                      | `Active` |
-| [**Ancient Blessing**](https://ancientblessing.com)     | Shopify store for intention bracelets, tarot, pendulums and runes                              | `Active` |
+| [**Pradawne Dary**](https://pradawnedary.pl)            | Polish Shopify store for tarot, runes, pendulums and intention bracelets                       | `Active` |
+| [**Fuoco e Paura**](https://fuocoepaura.pl)             | AI-run Polish AC Milan news blog: transfers, fixtures, Serie A table                           | `Active` |
 | [**Ratio**](https://ratio.whoisarjen.com)               | Open source Polish B2B tax calculator — compare tax forms, ZUS, IP BOX                         | `Active` |
 | [**Logify**](https://logify.whoisarjen.com)             | Open source log management — ingest, search, and visualize logs in real-time                   | `Active` |
 | [**Vigil**](https://vigil.whoisarjen.com)               | Open source cron monitoring                                                                    | `Active` |
