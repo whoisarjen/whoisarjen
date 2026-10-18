@@ -10,6 +10,7 @@ import RiseObserver from '@/components/home/RiseObserver'
 const MAX_POSTS_DISPLAY = 6
 const FEATURED_PROJECTS = [
   'Pradawne Dary',
+  'Fuoco e Paura',
   'Deante',
   'Deante Design Studio',
   'Comscore',
