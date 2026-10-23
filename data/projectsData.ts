@@ -18,9 +18,11 @@ export type Project = {
 const highlightedProjects: string[] = [
   'Comscore',
   'Deante',
+  'Deante Flow',
   'Deante Design Studio',
   'Juicify Open Source',
   'Digital Nomad',
+  'Fuoco e Paura',
   'Pradawne Dary',
   'Logify',
   'Ratio',
@@ -100,6 +102,14 @@ const extraProjects: Project[] = [
     imgSrc: '/static/images/projects/project-deante.png',
     href: 'https://deante.pl',
     techStack: ['Vue', 'Nuxt 3', 'PostgreSQL', 'Redis', 'TypeScript'],
+  },
+  {
+    title: 'Deante Flow',
+    description:
+      'Beta AI shopping assistant on deante.pl. Answers product, care and installation questions, filters and compares products, and finds service points.',
+    imgSrc: '/static/images/projects/project-deante-flow.png',
+    href: 'https://deante.pl',
+    techStack: ['Nuxt 3', 'Vue', 'AI'],
   },
   {
     title: 'Deante Design Studio',

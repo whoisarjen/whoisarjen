@@ -30,11 +30,12 @@ I'm a full-stack engineer who ships products and obsesses over performance. I bu
 | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------- |
 | [**Comscore**](https://www.comscore.com)                | Cross-platform audience analytics and advertising evaluation services                          | `Active` |
 | [**Deante**](https://deante.pl)                         | Multi-market e-commerce platform (13 languages, full-text search, Redis caching)               | `Active` |
+| [**Deante Flow**](https://deante.pl)                    | Beta AI shopping assistant for deante.pl: product answers, filtering and comparison            | `Beta`   |
 | [**Deante Design Studio**](https://deantedesign.studio) | 3D models, bathroom & kitchen collections, and design resources for architects                 | `Active` |
 | [**Juicify**](https://juicify.whoisarjen.com)           | AI-powered fitness & nutrition platform                                                        | `Active` |
 | [**Digital Nomad**](https://nomad.whoisarjen.com)       | Compare 500+ cities for digital nomads and remote workers                                      | `Active` |
-| [**Pradawne Dary**](https://pradawnedary.pl)            | Polish Shopify store for tarot, runes, pendulums and intention bracelets                       | `Active` |
 | [**Fuoco e Paura**](https://fuocoepaura.pl)             | AI-run Polish AC Milan news blog: transfers, fixtures, Serie A table                           | `Active` |
+| [**Pradawne Dary**](https://pradawnedary.pl)            | Polish Shopify store for tarot, runes, pendulums and intention bracelets                       | `Active` |
 | [**Ratio**](https://ratio.whoisarjen.com)               | Open source Polish B2B tax calculator — compare tax forms, ZUS, IP BOX                         | `Active` |
 | [**Logify**](https://logify.whoisarjen.com)             | Open source log management — ingest, search, and visualize logs in real-time                   | `Active` |
 | [**Vigil**](https://vigil.whoisarjen.com)               | Open source cron monitoring                                                                    | `Active` |
